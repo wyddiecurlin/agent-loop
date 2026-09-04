@@ -27,3 +27,6 @@ dist/
 
 # Logs
 *.log
+
+# Agent test sandbox
+sandbox/

@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Literal, Protocol, TypedDict
@@ -13,14 +14,21 @@ from openai import (
 	RateLimitError,
 )
 import json
+import shutil
+import subprocess
+from pathlib import Path
+
+from tools import REGISTRY, ToolCall, ToolResult
 
 
-DEFAULT_MODEL = "gpt-5-nano"
+DEFAULT_MODEL = "gpt-5.4-nano"  # fastest OpenAI TTFT (~0.67s) with reasoning off
+DEFAULT_REASONING_EFFORT = "none"  # no reasoning tokens before the first output token
 DEFAULT_TIMEOUT_S = 60.0
 DEFAULT_MAX_RETRIES = 3
 
 # USD per 1M tokens. Verify against the provider's pricing page before relying on these.
 PRICING: dict[str, dict[str, float]] = {
+	"gpt-5.4-nano": {"input": 0.20, "cached_input": 0.02, "output": 1.25},
 	"gpt-5-nano": {"input": 0.05, "cached_input": 0.005, "output": 0.40},
 	"gpt-5-mini": {"input": 0.25, "cached_input": 0.025, "output": 2.00},
 	"gpt-5": {"input": 1.25, "cached_input": 0.125, "output": 10.00},
@@ -126,13 +134,6 @@ Messages = str | list[InputItem]
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ToolCall:
-	id: str  # call id; echoed back to the model alongside the tool's result
-	name: str  # tool name, key into TOOL_FUNCTIONS
-	arguments: str  # JSON-encoded arguments; json.loads() before calling the tool
-
-
-@dataclass
 class ModelTurn:
 	text: str | None
 	tool_calls: list[ToolCall] | None
@@ -176,7 +177,12 @@ class OpenAIProvider:
 		on_tool_call: OnToolCall | None = None,
 		timeout: float = DEFAULT_TIMEOUT_S,
 	) -> ModelTurn:
-		kwargs: dict = {"model": model, "input": messages, "timeout": timeout}
+		kwargs: dict = {
+			"model": model,
+			"input": messages,
+			"timeout": timeout,
+			"reasoning": {"effort": DEFAULT_REASONING_EFFORT},
+		}
 		if tools:
 			kwargs["tools"] = tools
 
@@ -261,54 +267,13 @@ def with_retries(
 # Public entry point
 # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Tool schemas (Responses API function-tool format)
-# ---------------------------------------------------------------------------
-
-TOOLS: list[dict] = [
-	{
-		"type": "function",
-		"name": "multiply",
-		"description": "Use this for all multiplication. Never compute products yourself.",
-		"parameters": {
-			"type": "object",
-			"properties": {
-				"a": {"type": "number", "description": "First factor."},
-				"b": {"type": "number", "description": "Second factor."},
-				"c": {"type": "number", "description": "Optional third factor."},
-			},
-			"required": ["a", "b"],
-		},
-	},
-	{
-		"type": "function",
-		"name": "get_today_date",
-		"description": "Return today's date as month, day, and year.",
-		"parameters": {"type": "object", "properties": {}},
-	},
-	{
-		"type": "function",
-		"name": "substract",
-		"description": "Use this for all substraction. Never compute yourself.",
-		"parameters": {
-			"type": "object",
-			"properties": {
-				"a": {"type": "integer", "description": "Minuend."},
-				"b": {"type": "integer", "description": "Subtrahend."},
-			},
-			"required": ["a", "b"],
-		},
-	},
-]
-
-
 '''
 given list of messages and available tools, generate a response from the model
 '''
 def generate(
 	messages: Messages | None = None,
 	model: str = DEFAULT_MODEL,
-	tools: list[dict] | None = TOOLS,
+	tools: list[dict] | None = None,
 	*,
 	provider: Provider | None = None,
 	stream: bool = False,
@@ -321,6 +286,8 @@ def generate(
 	"""Generate a ModelTurn for the given messages, with retries, timeout, and cost tracking."""
 	load_dotenv()
 
+	if tools is None:
+		tools = REGISTRY.schema()
 	if provider is None:
 		if not os.getenv("OPENAI_API_KEY"):
 			raise RuntimeError("OPENAI_API_KEY is not set in the environment or .env")
@@ -335,35 +302,12 @@ def generate(
 	(tracker or TRACKER).record(turn)
 	return turn
 
-def multiply(**params) -> int:
-	res = 1
-	for k, v in params.items():
-		res *= v
-
-	return res
-
-def get_today_date() -> dict:
-	from datetime import datetime
-
-	today = datetime.now()
-	return {"month": today.month, "day": today.day, "year": today.year}
-	
-def substract(a: int, b: int) -> int:
-	return a - b
-
-
-# tool name -> python callable, for dispatching tool calls in the agent loop
-TOOL_FUNCTIONS: dict[str, Callable] = {
-	"multiply": multiply,
-	"get_today_date": get_today_date,
-	"substract": substract,
-}
-
 def stream(t: str) -> str:
 	print(t, end='', flush=True)
 
 def stream_tool_calls(t: str, kind: Literal['function_call', 'function_args']):
 	if kind == 'function_call':
+		print()
 		print(f"tool calling: {t}")
 	else:
 		print(t, end='', flush=True)
@@ -374,14 +318,14 @@ def agent_loop(prompt) -> None:
 		Message(role='system', content='You are a helpful assistant'),
 		Message(role='user', content=prompt)
 	]
-	while len(messages)<20:
+	while len(messages)<40:
 		print(f"[LOG] loop start 1 message length {len(messages)}")
 		turn = generate(
 			messages=messages,
 			stream=True,
 			on_text=stream,
 			on_tool_call=stream_tool_calls,
-			tools=TOOLS	
+			tools=REGISTRY.schema(),
 		)
 		print()
 		# state 2: agent receives current state, emits tool call
@@ -391,10 +335,11 @@ def agent_loop(prompt) -> None:
 				messages.append(Message(role='assistant', content=turn.text))
 
 			for tool_call in turn.tool_calls:
-				result = TOOL_FUNCTIONS[tool_call.name](**json.loads(tool_call.arguments))
+				result: ToolResult = REGISTRY.execute(tool_call)
 				messages.append(FunctionCallItem(type='function_call', name=tool_call.name, arguments=tool_call.arguments, call_id=str(tool_call.id)))
-				print(f"[LOG] calling {tool_call.name} with {tool_call.arguments}, result {result}")
-				messages.append(FunctionCallOutputItem(type='function_call_output', output=str(result), call_id=str(tool_call.id)))
+				print(f"[LOG] calling {tool_call.name} with {tool_call.arguments} -> ok={result.ok} {result.metadata}")
+				print(f"[LOG]   {result.output[:300]}")
+				messages.append(FunctionCallOutputItem(type='function_call_output', output=result.to_model_output(), call_id=str(tool_call.id)))
 
 			continue
 		
@@ -407,23 +352,135 @@ def agent_loop(prompt) -> None:
 
 
 
+# ---------------------------------------------------------------------------
+# Test harness
+# ---------------------------------------------------------------------------
+
+SANDBOX = Path("sandbox")
+
+SANDBOX_FILES = {
+	"notes.txt": "The answer is 42\nsecond line\nthird line: banana\n",
+	"app.py": (
+		"def greet(name: str) -> str:\n"
+		"    return f\"Hello, {name}!\"\n"
+		"\n"
+		"\n"
+		"if __name__ == \"__main__\":\n"
+		"    print(greet(\"World\"))\n"
+	),
+	"data/config.json": '{"version": "1.2.3", "debug": false}\n',
+}
+
+
+def setup_sandbox() -> None:
+	"""Fresh sandbox/ tree with known contents so the fs/shell tests are deterministic."""
+	shutil.rmtree(SANDBOX, ignore_errors=True)
+	for rel, content in SANDBOX_FILES.items():
+		path = SANDBOX / rel
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text(content)
+
+
+def teardown_sandbox() -> None:
+	shutil.rmtree(SANDBOX, ignore_errors=True)
+
+
+def final_text(messages: list[InputItem] | None) -> str:
+	"""Last assistant message in the transcript, or '' if the loop hit its cap."""
+	if not messages:
+		return ""
+	for item in reversed(messages):
+		if item.get("role") == "assistant":
+			return item["content"]
+	return ""
+
+
+def contains_number(text: str, n: int) -> str:
+	"""True if `n` appears in `text`, ignoring thousands separators like 54,702 or LaTeX 54{,}702."""
+	normalized = re.sub(r"(?<=\d)(,|\{,\}|\s)(?=\d{3})", "", text)
+	return re.search(rf"(?<!\d){n}(?!\d)", normalized) is not None
+
+
+def check(label: str, passed: bool, detail: str = "") -> bool:
+	print(f"[{'PASS' if passed else 'FAIL'}] {label}" + (f" -- {detail}" if detail else ""))
+	return passed
+
+
+def run_case(n: int, prompt: str) -> str:
+	print(f"\n{'=' * 70}\nTest case {n}: {prompt}\n{'=' * 70}")
+	return final_text(agent_loop(prompt=prompt))
+
+
 def main() -> None:
-	# test case 1: get today's date and compute the multiplication of month and day and year
+	results: list[bool] = []
 
-	print("Test case 1: Get today's date and compute the multiplication of month, day, and year.")
-	prompt = "Get today's date and compute the multiplication of month, day, and year."
-	res = agent_loop(prompt=prompt)
-	# print(f"expected output: 2026 * 9 * 2 = 36468, actual output: {json.dumps(res, indent=2)}")
+	# --- arithmetic / date tools -------------------------------------------------
 
+	answer = run_case(1, "Get today's date and compute the multiplication of month, day, and year.")
+	from datetime import datetime
+	today = datetime.now()
+	expected = today.month * today.day * today.year
+	results.append(check("case 1: product of month*day*year", contains_number(answer, expected), f"expected {expected}"))
 
-	# test case 2: get today's date and compute the multiplication of month and day and year
+	answer = run_case(
+		2,
+		"Multiply month, day, and year of today's date, and do the same for the founding date of "
+		"China's communist party 1949.10.1, and substract the two results.",
+	)
+	expected = today.month * today.day * today.year - 10 * 1 * 1949
+	results.append(check("case 2: difference of the two products", contains_number(answer, expected), f"expected {expected}"))
 
-	print("Test case 2: Multiply month, day, and year of today's date, and do the same for the founding date of China's communist party 1949.10.1, and substract the two results.")
-	prompt = "Multiply month, day, and year of today's date, and do the same for the founding date of China's communist party 1949.10.1, and substract the two results."
-	res = agent_loop(prompt=prompt)
-	# print(f"expected output: 16978, actual output: {json.dumps(res, indent=2)}")
+	# --- filesystem / shell tools --------------------------------------------------
 
-	print(f"\n[USAGE] {TRACKER.summary()}")
+	setup_sandbox()
+	try:
+		# 3. fs_list
+		answer = run_case(3, "List every file under the sandbox directory, recursively, and tell me how many files there are.")
+		results.append(check(
+			"case 3: fs_list finds all 3 files",
+			"3" in answer and "notes.txt" in answer and "app.py" in answer and "config.json" in answer,
+		))
+
+		# 4. fs_read
+		answer = run_case(4, "Read sandbox/data/config.json and tell me the version number it contains.")
+		results.append(check("case 4: fs_read reports version", "1.2.3" in answer))
+
+		# 5. fs_search
+		answer = run_case(5, "Search the sandbox directory for the word 'banana'. Tell me the file name and the line number it appears on.")
+		results.append(check("case 5: fs_search locates banana", "notes.txt" in answer and "3" in answer))
+
+		# 6. fs_patch
+		answer = run_case(6, "In sandbox/app.py, change the greeting word 'Hello' to 'Howdy'. Do not change anything else.")
+		app_src = (SANDBOX / "app.py").read_text()
+		results.append(check(
+			"case 6: fs_patch edits app.py in place",
+			"Howdy" in app_src and "Hello" not in app_src and "greet(" in app_src,
+		))
+
+		# 7. shell_run
+		expected_out = subprocess.run(["python3", str(SANDBOX / "app.py")], capture_output=True, text=True).stdout.strip()
+		answer = run_case(7, "Run the shell command `python3 sandbox/app.py` and tell me exactly what it printed.")
+		results.append(check("case 7: shell_run captures stdout", expected_out in answer, f"expected {expected_out!r}"))
+
+		# 8. combined: list + read/shell + create file + read back
+		answer = run_case(
+			8,
+			"Create a new file sandbox/summary.md containing a markdown bullet list of every file in the sandbox "
+			"directory (recursively) with its line count, for example '- notes.txt: 3 lines'. "
+			"Then read the file back and confirm its contents.",
+		)
+		summary = SANDBOX / "summary.md"
+		body = summary.read_text() if summary.exists() else ""
+		results.append(check(
+			"case 8: summary.md created with all files",
+			summary.exists() and all(name in body for name in ("notes.txt", "app.py", "config.json")),
+			f"exists={summary.exists()}",
+		))
+	finally:
+		teardown_sandbox()
+
+	print(f"\n[RESULT] {sum(results)}/{len(results)} test cases passed")
+	print(f"[USAGE] {TRACKER.summary()}")
 
 
 if __name__ == "__main__":
