@@ -32,7 +32,15 @@ PRICING: dict[str, dict[str, float]] = {
 	"gpt-5-nano": {"input": 0.05, "cached_input": 0.005, "output": 0.40},
 	"gpt-5-mini": {"input": 0.25, "cached_input": 0.025, "output": 2.00},
 	"gpt-5": {"input": 1.25, "cached_input": 0.125, "output": 10.00},
+	# self-hosted (vLLM on the local box) -> no per-token cost
+	"qwen3.5-9b": {"input": 0.0, "cached_input": 0.0, "output": 0.0},
 }
+
+# Provider selection: PROVIDER=openai (default) | qwen
+# qwen = self-hosted Qwen3.5-9B behind vLLM's OpenAI-compatible Chat Completions API.
+DEFAULT_PROVIDER = "openai"
+QWEN_BASE_URL = "http://localhost:9000/v1"
+QWEN_MODEL = "qwen3.5-9b"
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +240,191 @@ class OpenAIProvider:
 		)
 
 
+class QwenProvider:
+	"""Self-hosted Qwen (vLLM) via the OpenAI Chat Completions API.
+
+	The rest of the loop speaks the Responses API shapes (Message / FunctionCallItem /
+	FunctionCallOutputItem, tools as {"type","name","parameters"}), so this provider
+	translates both directions and returns the same ModelTurn as OpenAIProvider.
+
+	Env: QWEN_BASE_URL (default http://localhost:9000/v1), QWEN_API_KEY (optional),
+	QWEN_THINKING=1 to let the model reason before answering (slower, more tokens).
+	"""
+
+	def __init__(
+		self,
+		client: OpenAI | None = None,
+		timeout: float = DEFAULT_TIMEOUT_S,
+		base_url: str | None = None,
+		api_key: str | None = None,
+		thinking: bool | None = None,
+	):
+		self.client = client or OpenAI(
+			base_url=base_url or os.getenv("QWEN_BASE_URL", QWEN_BASE_URL),
+			api_key=api_key or os.getenv("QWEN_API_KEY", "EMPTY"),
+			timeout=timeout,
+			max_retries=0,
+		)
+		self.thinking = thinking if thinking is not None else os.getenv("QWEN_THINKING", "0") == "1"
+
+	# -- Responses-style input -> Chat Completions messages --------------------
+
+	@staticmethod
+	def _to_chat_messages(messages: Messages) -> list[dict]:
+		if isinstance(messages, str):
+			return [{"role": "user", "content": messages}]
+		out: list[dict] = []
+		for item in messages:
+			kind = item.get("type")
+			if kind == "function_call":
+				call = {
+					"id": item["call_id"],
+					"type": "function",
+					"function": {"name": item["name"], "arguments": item["arguments"]},
+				}
+				# Merge consecutive tool calls into one assistant message (chat format).
+				if out and out[-1]["role"] == "assistant" and out[-1].get("tool_calls") and out[-1].get("content") is None:
+					out[-1]["tool_calls"].append(call)
+				else:
+					out.append({"role": "assistant", "content": None, "tool_calls": [call]})
+			elif kind == "function_call_output":
+				out.append({"role": "tool", "tool_call_id": item["call_id"], "content": item["output"]})
+			else:
+				role = "system" if item["role"] == "developer" else item["role"]
+				out.append({"role": role, "content": item["content"]})
+		return out
+
+	@staticmethod
+	def _to_chat_tools(tools: list[dict]) -> list[dict]:
+		converted = []
+		for t in tools:
+			if "function" in t:  # already chat format
+				converted.append(t)
+				continue
+			converted.append({
+				"type": "function",
+				"function": {
+					"name": t["name"],
+					"description": t.get("description", ""),
+					"parameters": t.get("parameters", {"type": "object", "properties": {}}),
+				},
+			})
+		return converted
+
+	def generate(
+		self,
+		messages: Messages,
+		model: str,
+		tools: list[dict] | None,
+		*,
+		stream: bool = False,
+		on_text: OnText | None = None,
+		on_tool_call: OnToolCall | None = None,
+		timeout: float = DEFAULT_TIMEOUT_S,
+	) -> ModelTurn:
+		kwargs: dict = {
+			"model": model,
+			"messages": self._to_chat_messages(messages),
+			"timeout": timeout,
+			"extra_body": {"chat_template_kwargs": {"enable_thinking": self.thinking}},
+		}
+		if tools:
+			kwargs["tools"] = self._to_chat_tools(tools)
+			kwargs["tool_choice"] = "auto"
+
+		if not stream:
+			resp = self.client.chat.completions.create(**kwargs)
+			choice = resp.choices[0]
+			text = choice.message.content or None
+			calls = [
+				ToolCall(id=tc.id, name=tc.function.name, arguments=tc.function.arguments or "{}")
+				for tc in (choice.message.tool_calls or [])
+			]
+			return self._to_turn(text, calls, resp.usage, choice.finish_reason, model)
+
+		# Streaming: accumulate text + tool-call fragments keyed by index.
+		text_parts: list[str] = []
+		pending: dict[int, dict] = {}
+		usage = None
+		finish = None
+		for chunk in self.client.chat.completions.create(
+			stream=True, stream_options={"include_usage": True}, **kwargs
+		):
+			if chunk.usage:
+				usage = chunk.usage
+			if not chunk.choices:
+				continue
+			choice = chunk.choices[0]
+			finish = choice.finish_reason or finish
+			delta = choice.delta
+			if delta.content:
+				text_parts.append(delta.content)
+				if on_text:
+					on_text(delta.content)
+			for tc in delta.tool_calls or []:
+				slot = pending.setdefault(tc.index, {"id": None, "name": None, "args": []})
+				if tc.id:
+					slot["id"] = tc.id
+				fn = tc.function
+				if fn and fn.name:
+					slot["name"] = fn.name
+					if on_tool_call:
+						on_tool_call(fn.name, "function_call")
+				if fn and fn.arguments:
+					slot["args"].append(fn.arguments)
+					if on_tool_call:
+						on_tool_call(fn.arguments, "function_args")
+
+		calls = [
+			ToolCall(
+				id=slot["id"] or f"call_{i}",
+				name=slot["name"] or "",
+				arguments="".join(slot["args"]) or "{}",
+			)
+			for i, slot in sorted(pending.items())
+		]
+		return self._to_turn("".join(text_parts) or None, calls, usage, finish, model)
+
+	@staticmethod
+	def _to_turn(text, calls, raw_usage, finish_reason, model: str) -> ModelTurn:
+		usage = None
+		if raw_usage is not None:
+			in_details = getattr(raw_usage, "prompt_tokens_details", None)
+			out_details = getattr(raw_usage, "completion_tokens_details", None)
+			cached = getattr(in_details, "cached_tokens", 0) or 0
+			reasoning = getattr(out_details, "reasoning_tokens", 0) or 0
+			usage = Usage(
+				input_tokens=raw_usage.prompt_tokens,
+				cached_input_tokens=cached,
+				output_tokens=raw_usage.completion_tokens,
+				reasoning_tokens=reasoning,
+				cost_usd=compute_cost(model, raw_usage.prompt_tokens, cached, raw_usage.completion_tokens),
+			)
+		# Map chat finish_reason onto the Responses-style status the loop expects.
+		stop = {"stop": "completed", "tool_calls": "completed", "length": "incomplete"}.get(finish_reason, finish_reason)
+		return ModelTurn(text=text, tool_calls=calls or None, usage=usage, stop_reason=stop)
+
+
+def make_provider(name: str | None = None, timeout: float = DEFAULT_TIMEOUT_S) -> Provider:
+	"""Build the provider named by `name` (or the PROVIDER env var)."""
+	name = (name or os.getenv("PROVIDER", DEFAULT_PROVIDER)).lower()
+	if name == "qwen":
+		return QwenProvider(timeout=timeout)
+	if name == "openai":
+		if not os.getenv("OPENAI_API_KEY"):
+			raise RuntimeError("OPENAI_API_KEY is not set in the environment or .env")
+		return OpenAIProvider(timeout=timeout)
+	raise ValueError(f"unknown PROVIDER {name!r} (expected 'openai' or 'qwen')")
+
+
+def default_model(provider_name: str | None = None) -> str:
+	"""Model to use when the caller didn't pick one: depends on the active provider."""
+	name = (provider_name or os.getenv("PROVIDER", DEFAULT_PROVIDER)).lower()
+	if name == "qwen":
+		return os.getenv("QWEN_MODEL", QWEN_MODEL)
+	return os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
+
+
 # ---------------------------------------------------------------------------
 # Retries
 # ---------------------------------------------------------------------------
@@ -272,7 +465,7 @@ given list of messages and available tools, generate a response from the model
 '''
 def generate(
 	messages: Messages | None = None,
-	model: str = DEFAULT_MODEL,
+	model: str | None = None,
 	tools: list[dict] | None = None,
 	*,
 	provider: Provider | None = None,
@@ -289,9 +482,9 @@ def generate(
 	if tools is None:
 		tools = REGISTRY.schema()
 	if provider is None:
-		if not os.getenv("OPENAI_API_KEY"):
-			raise RuntimeError("OPENAI_API_KEY is not set in the environment or .env")
-		provider = OpenAIProvider(timeout=timeout)
+		provider = make_provider(timeout=timeout)
+	if model is None:
+		model = default_model()
 
 	turn = with_retries(
 		lambda: provider.generate(
