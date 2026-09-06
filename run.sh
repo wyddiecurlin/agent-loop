@@ -1,5 +1,29 @@
 #!/usr/bin/env bash
-
+# The launcher: the one place a container is created, and the only way the agent runs.
+#
+#   ./run.sh "fix the failing test in src/parser.py"
+#
+# The agent process is never outside. It cannot create the box it stands in, so this
+# script does -- and everything else, including the test suites, comes through here.
+set -euo pipefail
 cd "$(dirname "$0")"
-source .venv/bin/activate
-exec python3 main.py
+
+TARGET=${AGENT_TARGET:-dev}          # dev | test: the Dockerfile stage
+IMAGE=agent-loop:$TARGET
+
+# Always build. With the cache warm this is well under a second, and it is the only
+# way a code change is guaranteed to be what runs -- an "if missing" check silently
+# runs stale code after every edit.
+docker build -q --target "$TARGET" -t "$IMAGE" . >/dev/null
+
+opts=(--rm --init
+	--memory 2g --memory-swap 2g --cpus 2 --pids-limit 256
+	# Three capabilities kept, all for the `sandbox` user: SETUID/SETGID to drop a
+	# model-written command to it, KILL to time it out afterwards -- without CAP_KILL even
+	# root cannot signal another uid's process. no-new-privileges stops the way back up.
+	--cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add KILL --security-opt no-new-privileges)
+if [ -t 0 ] && [ -t 1 ]; then opts+=(--tty --interactive); fi
+if [ -f .env ]; then opts+=(--env-file .env); fi
+if [ -n "${AGENT_ENTRYPOINT:-}" ]; then opts+=(--entrypoint "$AGENT_ENTRYPOINT"); fi
+
+exec docker run "${opts[@]}" "$IMAGE" "$@"

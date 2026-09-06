@@ -8,7 +8,7 @@ build_registry(). Nothing in this module may spawn a process or reach a file on 
 own, so that "the agent runs inside the sandbox" is a property of the code rather than
 something we remember to arrange. The check that proves it, from the repo root:
 
-	./lint_isolation.sh
+	./test.sh lint
 """
 
 import fnmatch
@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Callable
 
-from runtime import Runtime
+from .runtime import DockerRuntime
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +190,7 @@ def substract(a: int, b: int) -> int:
 	return a - b
 
 
-def fs_list(runtime: Runtime, path: str = ".", recursive: bool = False, max_entries: int = 200) -> ToolResult:
+def fs_list(runtime: DockerRuntime, path: str = ".", recursive: bool = False, max_entries: int = 200) -> ToolResult:
 	st = runtime.stat(path)
 	if st is None:
 		raise FileNotFoundError(f"{path!r} does not exist")
@@ -215,7 +215,7 @@ def fs_list(runtime: Runtime, path: str = ".", recursive: bool = False, max_entr
 	return ToolResult(ok=True, output=output, metadata={"path": st.path, "count": len(entries), "truncated": truncated})
 
 
-def fs_read(runtime: Runtime, path: str, start_line: int | None = None, end_line: int | None = None) -> ToolResult:
+def fs_read(runtime: DockerRuntime, path: str, start_line: int | None = None, end_line: int | None = None) -> ToolResult:
 	st = runtime.stat(path)
 	if st is None or st.is_dir:
 		raise FileNotFoundError(f"{path!r} is not a file")
@@ -247,7 +247,7 @@ def fs_read(runtime: Runtime, path: str, start_line: int | None = None, end_line
 
 
 def fs_search(
-	runtime: Runtime,
+	runtime: DockerRuntime,
 	pattern: str,
 	path: str = ".",
 	glob: str | None = None,
@@ -299,7 +299,7 @@ def fs_search(
 	)
 
 
-def fs_patch(runtime: Runtime, path: str, old_string: str, new_string: str, replace_all: bool = False) -> ToolResult:
+def fs_patch(runtime: DockerRuntime, path: str, old_string: str, new_string: str, replace_all: bool = False) -> ToolResult:
 	st = runtime.stat(path)
 
 	if st is None:
@@ -334,7 +334,7 @@ def fs_patch(runtime: Runtime, path: str, old_string: str, new_string: str, repl
 	)
 
 
-def shell_run(runtime: Runtime, command: str, cwd: str | None = None, timeout_s: float = 30.0) -> ToolResult:
+def shell_run(runtime: DockerRuntime, command: str, cwd: str | None = None, timeout_s: float = 30.0) -> ToolResult:
 	result = runtime.run(command, cwd=cwd, timeout_s=timeout_s)
 
 	if result.timed_out:
@@ -379,7 +379,7 @@ def done(answer: str) -> ToolResult:
 # Registry
 # ---------------------------------------------------------------------------
 
-def build_registry(runtime: Runtime) -> ToolRegistry:
+def build_registry(runtime: DockerRuntime) -> ToolRegistry:
 	"""Every tool that touches the world is bound to `runtime` here.
 
 	This is the enforcement point. There is no module-level registry, so no caller can

@@ -1,31 +1,35 @@
-"""Execution runtimes: the only module in this codebase that touches a filesystem
+"""The execution runtime: the only module in this codebase that touches a filesystem
 or spawns a process.
 
-Every tool reaches the outside world through a Runtime, so swapping LocalRuntime
-for DockerRuntime (build step 4) or a remote provider changes nothing above this
-module. See RUNTIME.md.
+There is one runtime and one topology. The agent process is itself inside a
+container, so when a tool runs `ls`, that `ls` is already in the box - there is no
+boundary left to cross and nothing to proxy through. The container is created by the
+launcher (`run.sh`) before Python starts; the agent cannot create the box it is
+standing in.
 
-Two transfer surfaces, deliberately separate because they have different costs:
+That is why this class is named for *where it runs*, not for what it drives: it
+contains no Docker code at all. Its guarantee is negative and structural - if this
+process is not inside a container, `setup()` refuses to give you a runtime.
+
+Two transfer surfaces, kept separate because the launcher may not always be Docker:
 
   read/write  - one small file, per tool call, inside the loop
-  put/get     - whole trees, at setup/teardown, batched into one round trip
+  put/get     - whole trees, at setup/teardown, batched into one call
 
-Never loop write() over many files. On a remote runtime that is one network
-round trip each; put() takes a dict and sends them together.
-
-Paths are always relative to the runtime's root and are resolved by the runtime,
-never by the caller. That containment check is the reason `open()` and
-`subprocess` must not appear anywhere outside this file.
+Paths are always relative to the runtime's root and are resolved here, never by the
+caller. That containment check is why `open()` and `subprocess` must not appear
+anywhere outside this file - `./test.sh lint` proves it.
 """
 
 import os
+import pwd
 import shutil
 import signal
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Protocol, runtime_checkable
+from typing import Iterable, Mapping
 
 
 # ---------------------------------------------------------------------------
@@ -56,104 +60,73 @@ class FileStat:
 	size: int  # 0 for directories
 
 
-# Environment the sandbox sees. An allowlist, never inheritance: os.environ holds
-# OPENAI_API_KEY after load_dotenv(), and a subprocess that inherits it can ship it
-# anywhere. A container starts with roughly this set, so LocalRuntime matching it
-# keeps the two implementations honest.
+# The environment a model-written command sees. An allowlist, never inheritance: the
+# agent process legitimately holds API keys for its tools, and no shell command it runs
+# may inherit them.
 DEFAULT_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "TZ")
 
+# The allowlist alone is not a wall: a command running as the same user could read the
+# keys straight out of /proc/1/environ. So model-written commands drop to this user,
+# which the image creates. Our own tool code stays root and keeps the keys.
+SANDBOX_USER = "sandbox"
 
-# ---------------------------------------------------------------------------
-# Interface
-# ---------------------------------------------------------------------------
+CONTAINER_ROOT = "/work"
 
-@runtime_checkable
-class Runtime(Protocol):
-	"""What a tool is allowed to ask of the outside world.
+# Set to "1" to run outside a container anyway. It removes the only boundary there is,
+# so it exists for debugging the runtime itself and for nothing else.
+UNSAFE_HOST = "AGENT_UNSAFE_HOST"
 
-	Ordering contract for list_dir, which implementations must match so tool output
-	does not shift when the runtime is swapped:
+
+class DockerRuntime:
+	"""What a tool is allowed to ask of the outside world, from inside the container.
+
+	Ordering contract for list_dir, so tool output is stable:
 	  recursive=False -> immediate children; directories first (alphabetical),
 	                     then files (alphabetical)
 	  recursive=True  -> files only, depth-first, sorted at each level
 	Names in `skip` are pruned by basename in both modes.
 	"""
 
-	def setup(self) -> None:
-		"""Create the execution environment. Cheap for local, boots a container for Docker."""
-
-	def teardown(self) -> None:
-		"""Destroy it. Must be safe to call twice."""
-
-	def relpath(self, path: str) -> str:
-		"""Normalize `path` and raise PermissionError if it escapes the root. No I/O."""
-
-	def run(self, command: str, *, cwd: str | None = None, timeout_s: float = 30.0,
-	        env: Mapping[str, str] | None = None) -> RunResult: ...
-
-	def stat(self, path: str) -> FileStat | None:
-		"""FileStat for `path`, or None if it does not exist."""
-
-	def list_dir(self, path: str = ".", *, recursive: bool = False,
-	             skip: Iterable[str] = (), max_entries: int = 200) -> list[FileStat]:
-		"""At most `max_entries` entries. Ask for one more than you need to detect truncation."""
-
-	def read_bytes(self, path: str, *, max_bytes: int | None = None) -> bytes: ...
-
-	def read_text(self, path: str) -> str: ...
-
-	def write(self, path: str, content: str | bytes) -> None:
-		"""Write `path`, creating parent directories."""
-
-	def remove(self, path: str) -> None:
-		"""Delete a file or tree. Missing paths are not an error."""
-
-	def put(self, files: Mapping[str, str | bytes]) -> None:
-		"""Bulk upload. One round trip, however many files."""
-
-	def get(self, paths: Iterable[str]) -> dict[str, bytes]:
-		"""Bulk download. One round trip, however many files."""
-
-	def snapshot(self) -> str: ...
-
-	def reset(self, snapshot: str | None = None) -> None: ...
-
-
-# ---------------------------------------------------------------------------
-# Local
-# ---------------------------------------------------------------------------
-
-class LocalRuntime:
-	"""Runs in this process, confined to `root` by path checks.
-
-	The path checks are argument hygiene, not a boundary: `run()` hands a string to a
-	shell, and the shell is free to `cd /`. Whether that matters depends entirely on
-	where this process is running (see RUNTIME.md, "Topology"):
-
-	  CLI mode   - the agent is on a developer's machine, so nothing isolates it here.
-	               Use DockerRuntime; LocalRuntime is a fallback for development only.
-	  Fleet mode - the agent is itself PID 1 inside a disposable container, so the
-	               boundary is already one level out and LocalRuntime is the correct
-	               production choice. There is nothing left to contain in-process.
-
-	Same class, opposite verdicts. The env allowlist and process-group kill below hold
-	in both, so behavior does not shift when the topology does.
-	"""
-
-	def __init__(self, root: str | Path | None = None,
+	def __init__(self, root: str | Path = CONTAINER_ROOT,
 	             env_allowlist: Iterable[str] = DEFAULT_ENV_ALLOWLIST):
-		self.root = Path(root or Path.cwd()).resolve()
+		self.root = Path(root).resolve()
 		self._env_allowlist = tuple(env_allowlist)
+		# On a host with AGENT_UNSAFE_HOST there is no such user and no privilege to drop.
+		try:
+			self._sandbox: pwd.struct_passwd | None = pwd.getpwnam(SANDBOX_USER)
+		except KeyError:
+			self._sandbox = None
 
 	# -- lifecycle ----------------------------------------------------------
 
 	def setup(self) -> None:
+		"""Create the workspace, refusing to exist outside a container.
+
+		This is the structural half of "the agent process is never outside". The other
+		half is `run.sh`, which is the only thing that starts one.
+		"""
+		if not Path("/.dockerenv").exists() and os.getenv(UNSAFE_HOST) != "1":
+			raise RuntimeError(
+				"agent-loop runs inside a container, and this process is not in one. "
+				"Launch it with ./run.sh. To override deliberately, set "
+				f"{UNSAFE_HOST}=1 - that removes the only boundary there is."
+			)
 		self.root.mkdir(parents=True, exist_ok=True)
+		os.umask(0o002)  # what the agent writes, the sandbox user can edit (shared group)
+		if not (self.root / ".git").exists():
+			# A baseline commit so snapshot() always has a parent to hang off. /work is
+			# disposable, which is what makes reset() safe here and unsafe anywhere else.
+			r = self.run(
+				"git init -q -b main . && git config user.email agent@localhost"
+				" && git config user.name agent-loop && git commit -q --allow-empty -m baseline"
+			)
+			if not r.ok:
+				raise RuntimeError(f"could not initialise {self.root}: {r.stderr.strip()}")
 
 	def teardown(self) -> None:
-		"""No-op: `root` is the developer's own directory and is not ours to delete."""
+		"""No-op: the container's death is the teardown, and it takes /work with it."""
 
-	def __enter__(self) -> "LocalRuntime":
+	def __enter__(self) -> "DockerRuntime":
 		self.setup()
 		return self
 
@@ -169,6 +142,7 @@ class LocalRuntime:
 		return p
 
 	def relpath(self, path: str) -> str:
+		"""Normalize `path` and raise PermissionError if it escapes the root. No I/O."""
 		return self._rel(self._resolve(path))
 
 	def _rel(self, p: Path) -> str:
@@ -186,6 +160,8 @@ class LocalRuntime:
 	def _env(self, extra: Mapping[str, str] | None) -> dict[str, str]:
 		env = {k: os.environ[k] for k in self._env_allowlist if k in os.environ}
 		env.setdefault("PATH", os.defpath)
+		if self._sandbox:
+			env["HOME"] = self._sandbox.pw_dir  # not root's; the command cannot read it anyway
 		env.update(extra or {})
 		return env
 
@@ -204,6 +180,11 @@ class LocalRuntime:
 			# Own process group, so a timeout can kill grandchildren too. Without this,
 			# subprocess's own timeout kills only the shell and leaves `npm test` running.
 			start_new_session=True,
+			# Drop to the sandbox user: uid, gid, and no supplementary groups. This needs
+			# CAP_SETUID/SETGID, which run.sh keeps; no-new-privileges blocks the way back.
+			user=self._sandbox.pw_uid if self._sandbox else None,
+			group=self._sandbox.pw_gid if self._sandbox else None,
+			extra_groups=[] if self._sandbox else None,
 		)
 		timed_out = False
 		try:
@@ -229,17 +210,22 @@ class LocalRuntime:
 	def _signal_group(pid: int, sig: int) -> None:
 		try:
 			os.killpg(os.getpgid(pid), sig)
-		except (ProcessLookupError, PermissionError):
-			pass
+		except ProcessLookupError:
+			pass  # it finished between the timeout firing and the signal: the outcome we wanted
+		# PermissionError is deliberately not caught. The group belongs to the sandbox user,
+		# and signalling it needs CAP_KILL; if that is missing, a timeout would silently
+		# become "wait for the command to finish", which is worse than failing loudly.
 
 	# -- filesystem ---------------------------------------------------------
 
 	def stat(self, path: str) -> FileStat | None:
+		"""FileStat for `path`, or None if it does not exist."""
 		p = self._resolve(path)
 		return self._stat(p) if p.exists() else None
 
 	def list_dir(self, path: str = ".", *, recursive: bool = False,
 	             skip: Iterable[str] = (), max_entries: int = 200) -> list[FileStat]:
+		"""At most `max_entries` entries. Ask for one more than you need to detect truncation."""
 		root = self._resolve(path)
 		if not root.is_dir():
 			raise NotADirectoryError(f"{path!r} is not a directory")
@@ -275,6 +261,7 @@ class LocalRuntime:
 		return self.read_bytes(path).decode("utf-8", errors="replace")
 
 	def write(self, path: str, content: str | bytes) -> None:
+		"""Write `path`, creating parent directories."""
 		p = self._resolve(path)
 		p.parent.mkdir(parents=True, exist_ok=True)
 		if isinstance(content, str):
@@ -283,6 +270,7 @@ class LocalRuntime:
 			p.write_bytes(content)
 
 	def remove(self, path: str) -> None:
+		"""Delete a file or tree. Missing paths are not an error."""
 		p = self._resolve(path)
 		if p == self.root:
 			raise PermissionError("refusing to remove the runtime root")
@@ -294,40 +282,33 @@ class LocalRuntime:
 	# -- bulk transfer ------------------------------------------------------
 
 	def put(self, files: Mapping[str, str | bytes]) -> None:
+		"""Bulk write. Kept separate from write() because a future launcher may have to
+		ship these across a boundary, and then the batching is the difference between one
+		round trip and len(files) of them."""
 		for rel, content in files.items():
 			self.write(rel, content)
 
 	def get(self, paths: Iterable[str]) -> dict[str, bytes]:
+		"""Bulk read. See put()."""
 		return {p: self.read_bytes(p) for p in paths}
 
 	# -- state --------------------------------------------------------------
 
 	def snapshot(self) -> str:
-		raise NotImplementedError(
-			"LocalRuntime does not checkpoint: its root is the developer's real repository, "
-			"and reset() there would discard uncommitted work. Use DockerRuntime, whose /work "
-			"is disposable."
-		)
+		"""Commit the workspace and return the sha. Cheap: git is already in the image."""
+		r = self.run("git add -A && git commit-tree $(git write-tree) -p HEAD -m snapshot")
+		if not r.ok:
+			raise RuntimeError(f"snapshot failed: {r.stderr.strip()}")
+		return r.stdout.strip()
 
 	def reset(self, snapshot: str | None = None) -> None:
-		self.snapshot()  # raises with the explanation above
+		"""Roll /work back to `snapshot`, or to the baseline commit from setup().
 
-
-# ---------------------------------------------------------------------------
-# Selection
-# ---------------------------------------------------------------------------
-
-def make_runtime(kind: str | None = None, *, root: str | Path | None = None) -> Runtime:
-	"""Build the runtime named by `kind` (or AGENT_SANDBOX; default 'local').
-
-	Fails loudly on an unavailable backend rather than falling back. A sandbox we
-	think is on is worse than one we know is off.
-	"""
-	kind = (kind or os.getenv("AGENT_SANDBOX", "local")).lower()
-	if kind == "local":
-		return LocalRuntime(root)
-	if kind == "docker":
-		raise NotImplementedError(
-			"DockerRuntime is build step 4; AGENT_SANDBOX=docker is not available yet"
-		)
-	raise ValueError(f"unknown AGENT_SANDBOX {kind!r} (expected 'local' or 'docker')")
+		Safe here only because /work is disposable. The same call against a developer's
+		real repository would discard uncommitted work, which is why the agent process
+		being inside the container is what makes this method possible at all.
+		"""
+		target = snapshot or "main"
+		r = self.run(f"git reset -q --hard {target} && git clean -qfdx")
+		if not r.ok:
+			raise RuntimeError(f"reset failed: {r.stderr.strip()}")
