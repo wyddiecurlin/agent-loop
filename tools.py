@@ -3,19 +3,24 @@
 Tool names use underscores (fs_list, shell_run, ...) because the Responses API only
 allows [a-zA-Z0-9_-] in function names.
 
-All filesystem tools are confined to ROOT (the working directory at import time);
-paths that resolve outside it are rejected.
+Tools reach the outside world ONLY through the Runtime they are handed by
+build_registry(). Nothing in this module may spawn a process or reach a file on its
+own, so that "the agent runs inside the sandbox" is a property of the code rather than
+something we remember to arrange. The check that proves it, from the repo root:
+
+	./lint_isolation.sh
 """
 
 import fnmatch
 import json
-import os
+import posixpath
 import re
-import subprocess
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
+from functools import partial
 from typing import Any, Callable
+
+from runtime import Runtime
 
 
 # ---------------------------------------------------------------------------
@@ -148,39 +153,23 @@ class ToolRegistry:
 
 
 # ---------------------------------------------------------------------------
-# Filesystem / shell helpers
+# Filesystem policy
 # ---------------------------------------------------------------------------
 
-ROOT = Path.cwd().resolve()
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".mypy_cache", ".pytest_cache"}
 MAX_READ_BYTES = 100_000
+MAX_SEARCH_FILES = 5_000  # cap on files fetched for one fs_search; keeps the batch bounded
 
 
-def _resolve(path: str) -> Path:
-	"""Resolve `path` relative to ROOT and refuse anything that escapes it."""
-	p = (ROOT / path).resolve() if not os.path.isabs(path) else Path(path).resolve()
-	if p != ROOT and ROOT not in p.parents:
-		raise PermissionError(f"{path!r} is outside the working directory {ROOT}")
-	return p
-
-
-def _rel(p: Path) -> str:
-	try:
-		return str(p.relative_to(ROOT)) or "."
-	except ValueError:
-		return str(p)
-
-
-def _is_text_file(p: Path) -> bool:
-	try:
-		with p.open("rb") as f:
-			return b"\x00" not in f.read(2048)
-	except OSError:
-		return False
+def _looks_binary(data: bytes) -> bool:
+	return b"\x00" in data[:2048]
 
 
 # ---------------------------------------------------------------------------
 # Tool implementations
+#
+# Every fs_/shell_ tool takes the Runtime as its first argument; build_registry
+# binds it. Nothing here reads or writes a file on its own.
 # ---------------------------------------------------------------------------
 
 def multiply(**params) -> int:
@@ -201,53 +190,40 @@ def substract(a: int, b: int) -> int:
 	return a - b
 
 
-def fs_list(path: str = ".", recursive: bool = False, max_entries: int = 200) -> ToolResult:
-	root = _resolve(path)
-	if not root.exists():
+def fs_list(runtime: Runtime, path: str = ".", recursive: bool = False, max_entries: int = 200) -> ToolResult:
+	st = runtime.stat(path)
+	if st is None:
 		raise FileNotFoundError(f"{path!r} does not exist")
-	if root.is_file():
-		entry = {"path": _rel(root), "type": "file", "size": root.stat().st_size}
+	if not st.is_dir:
+		entry = {"path": st.path, "type": "file", "size": st.size}
 		return ToolResult(ok=True, output=json.dumps([entry]), metadata={"count": 1})
 
-	entries: list[dict] = []
-	truncated = False
-	if recursive:
-		for dirpath, dirnames, filenames in os.walk(root):
-			dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
-			for name in sorted(filenames):
-				p = Path(dirpath) / name
-				entries.append({"path": _rel(p), "type": "file", "size": p.stat().st_size})
-				if len(entries) >= max_entries:
-					truncated = True
-					break
-			if truncated:
-				break
-	else:
-		for p in sorted(root.iterdir(), key=lambda x: (x.is_file(), x.name)):
-			if p.name in SKIP_DIRS:
-				continue
-			if p.is_dir():
-				entries.append({"path": _rel(p) + "/", "type": "dir"})
-			else:
-				entries.append({"path": _rel(p), "type": "file", "size": p.stat().st_size})
-			if len(entries) >= max_entries:
-				truncated = True
-				break
+	# One extra entry so we can tell "exactly max_entries" from "there were more".
+	found = runtime.list_dir(path, recursive=recursive, skip=SKIP_DIRS, max_entries=max_entries + 1)
+	truncated = len(found) > max_entries
+	found = found[:max_entries]
+
+	entries = [
+		{"path": f.path + "/", "type": "dir"} if f.is_dir
+		else {"path": f.path, "type": "file", "size": f.size}
+		for f in found
+	]
 
 	output = json.dumps(entries)
 	if truncated:
 		output += f"\n[stopped after {max_entries} entries; raise max_entries or narrow path]"
-	return ToolResult(ok=True, output=output, metadata={"path": _rel(root), "count": len(entries), "truncated": truncated})
+	return ToolResult(ok=True, output=output, metadata={"path": st.path, "count": len(entries), "truncated": truncated})
 
 
-def fs_read(path: str, start_line: int | None = None, end_line: int | None = None) -> ToolResult:
-	p = _resolve(path)
-	if not p.is_file():
+def fs_read(runtime: Runtime, path: str, start_line: int | None = None, end_line: int | None = None) -> ToolResult:
+	st = runtime.stat(path)
+	if st is None or st.is_dir:
 		raise FileNotFoundError(f"{path!r} is not a file")
-	if not _is_text_file(p):
-		raise ValueError(f"{path!r} looks binary; refusing to read")
 
-	data = p.read_bytes()
+	# One read, capped: +1 byte tells us whether the file continued past the cap.
+	data = runtime.read_bytes(path, max_bytes=MAX_READ_BYTES + 1)
+	if _looks_binary(data):
+		raise ValueError(f"{path!r} looks binary; refusing to read")
 	file_truncated = len(data) > MAX_READ_BYTES
 	text = data[:MAX_READ_BYTES].decode("utf-8", errors="replace")
 	lines = text.splitlines()
@@ -261,7 +237,7 @@ def fs_read(path: str, start_line: int | None = None, end_line: int | None = Non
 		ok=True,
 		output=body,
 		metadata={
-			"path": _rel(p),
+			"path": st.path,
 			"total_lines": len(lines),
 			"start_line": start,
 			"end_line": end,
@@ -271,6 +247,7 @@ def fs_read(path: str, start_line: int | None = None, end_line: int | None = Non
 
 
 def fs_search(
+	runtime: Runtime,
 	pattern: str,
 	path: str = ".",
 	glob: str | None = None,
@@ -278,41 +255,39 @@ def fs_search(
 	case_sensitive: bool = False,
 	max_results: int = 100,
 ) -> ToolResult:
-	root = _resolve(path)
-	if not root.exists():
+	st = runtime.stat(path)
+	if st is None:
 		raise FileNotFoundError(f"{path!r} does not exist")
 
 	flags = 0 if case_sensitive else re.IGNORECASE
 	rx = re.compile(pattern if regex else re.escape(pattern), flags)
 
-	files = [root] if root.is_file() else []
-	if root.is_dir():
-		for dirpath, dirnames, filenames in os.walk(root):
-			dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
-			for name in sorted(filenames):
-				if glob and not fnmatch.fnmatch(name, glob):
-					continue
-				files.append(Path(dirpath) / name)
+	if st.is_dir:
+		found = runtime.list_dir(path, recursive=True, skip=SKIP_DIRS, max_entries=MAX_SEARCH_FILES)
+		candidates = [f.path for f in found if not glob or fnmatch.fnmatch(posixpath.basename(f.path), glob)]
+	else:
+		candidates = [st.path] if not glob or fnmatch.fnmatch(posixpath.basename(st.path), glob) else []
+
+	# One batched fetch rather than a read per file: on a remote runtime the
+	# difference is one round trip versus len(candidates) of them.
+	contents = runtime.get(candidates)
 
 	matches: list[str] = []
 	truncated = False
 	files_scanned = 0
-	for f in files:
+	for rel in candidates:
 		if truncated:
 			break
-		if not _is_text_file(f):
+		data = contents.get(rel, b"")
+		if _looks_binary(data):
 			continue
 		files_scanned += 1
-		try:
-			with f.open("r", encoding="utf-8", errors="replace") as fh:
-				for lineno, line in enumerate(fh, 1):
-					if rx.search(line):
-						matches.append(f"{_rel(f)}:{lineno}: {line.rstrip(chr(10))[:300]}")
-						if len(matches) >= max_results:
-							truncated = True
-							break
-		except OSError:
-			continue
+		for lineno, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
+			if rx.search(line):
+				matches.append(f"{rel}:{lineno}: {line.rstrip(chr(10))[:300]}")
+				if len(matches) >= max_results:
+					truncated = True
+					break
 
 	output = "\n".join(matches) if matches else "no matches"
 	if truncated:
@@ -324,26 +299,26 @@ def fs_search(
 	)
 
 
-def fs_patch(path: str, old_string: str, new_string: str, replace_all: bool = False) -> ToolResult:
-	p = _resolve(path)
+def fs_patch(runtime: Runtime, path: str, old_string: str, new_string: str, replace_all: bool = False) -> ToolResult:
+	st = runtime.stat(path)
 
-	if not p.exists():
+	if st is None:
 		if old_string != "":
 			raise FileNotFoundError(f"{path!r} does not exist; pass old_string='' to create it")
-		p.parent.mkdir(parents=True, exist_ok=True)
-		p.write_text(new_string, encoding="utf-8")
+		runtime.write(path, new_string)
+		rel = runtime.relpath(path)
 		return ToolResult(
 			ok=True,
-			output=f"created {_rel(p)}",
-			metadata={"path": _rel(p), "created": True, "bytes": len(new_string.encode())},
+			output=f"created {rel}",
+			metadata={"path": rel, "created": True, "bytes": len(new_string.encode())},
 		)
 
-	if not p.is_file():
+	if st.is_dir:
 		raise IsADirectoryError(f"{path!r} is not a file")
 	if old_string == "":
 		raise ValueError("old_string is empty but the file exists; give the exact text to replace")
 
-	text = p.read_text(encoding="utf-8")
+	text = runtime.read_text(path)
 	count = text.count(old_string)
 	if count == 0:
 		raise ValueError(f"old_string not found in {path!r}; it must match the file exactly (including whitespace)")
@@ -351,44 +326,33 @@ def fs_patch(path: str, old_string: str, new_string: str, replace_all: bool = Fa
 		raise ValueError(f"old_string matches {count} places in {path!r}; add more context or set replace_all=true")
 
 	replacements = count if replace_all else 1
-	new_text = text.replace(old_string, new_string, replacements)
-	p.write_text(new_text, encoding="utf-8")
+	runtime.write(path, text.replace(old_string, new_string, replacements))
 	return ToolResult(
 		ok=True,
-		output=f"patched {_rel(p)} ({replacements} replacement{'s' if replacements != 1 else ''})",
-		metadata={"path": _rel(p), "replacements": replacements},
+		output=f"patched {st.path} ({replacements} replacement{'s' if replacements != 1 else ''})",
+		metadata={"path": st.path, "replacements": replacements},
 	)
 
 
-def shell_run(command: str, cwd: str | None = None, timeout_s: float = 30.0) -> ToolResult:
-	workdir = _resolve(cwd) if cwd else ROOT
-	try:
-		proc = subprocess.run(
-			command,
-			shell=True,
-			cwd=workdir,
-			capture_output=True,
-			text=True,
-			timeout=timeout_s,
-		)
-	except subprocess.TimeoutExpired as exc:
-		stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-		stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+def shell_run(runtime: Runtime, command: str, cwd: str | None = None, timeout_s: float = 30.0) -> ToolResult:
+	result = runtime.run(command, cwd=cwd, timeout_s=timeout_s)
+
+	if result.timed_out:
 		return ToolResult(
 			ok=False,
-			output=f"command timed out after {timeout_s}s\nstdout:\n{stdout}\nstderr:\n{stderr}",
+			output=f"command timed out after {timeout_s}s\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}",
 			metadata={"exit_code": None, "timed_out": True, "timeout_s": timeout_s},
 		)
 
-	parts = [f"exit_code: {proc.returncode}"]
-	if proc.stdout:
-		parts.append(f"stdout:\n{proc.stdout.rstrip()}")
-	if proc.stderr:
-		parts.append(f"stderr:\n{proc.stderr.rstrip()}")
+	parts = [f"exit_code: {result.exit_code}"]
+	if result.stdout:
+		parts.append(f"stdout:\n{result.stdout.rstrip()}")
+	if result.stderr:
+		parts.append(f"stderr:\n{result.stderr.rstrip()}")
 	return ToolResult(
-		ok=proc.returncode == 0,
+		ok=result.ok,
 		output="\n".join(parts),
-		metadata={"exit_code": proc.returncode, "timed_out": False},
+		metadata={"exit_code": result.exit_code, "timed_out": False},
 	)
 
 
@@ -415,145 +379,153 @@ def done(answer: str) -> ToolResult:
 # Registry
 # ---------------------------------------------------------------------------
 
-REGISTRY = ToolRegistry([
-	Tool(
-		name=DONE_TOOL,
-		description=(
-			"End the task and submit the final answer. This is the only way to finish, and it "
-			"covers BOTH outcomes: if the task succeeded, `answer` is the complete reply for "
-			"the user; if it cannot be completed, call this anyway and use `answer` to say what "
-			"was tried and why it failed. `answer` must stand on its own - state the actual "
-			"values, file names, and command output you found rather than referring back to "
-			"earlier steps. Call it exactly once, by itself."
+def build_registry(runtime: Runtime) -> ToolRegistry:
+	"""Every tool that touches the world is bound to `runtime` here.
+
+	This is the enforcement point. There is no module-level registry, so no caller can
+	obtain a filesystem tool without first deciding which runtime it acts on.
+	"""
+	bind = lambda fn: partial(fn, runtime)  # noqa: E731
+
+	return ToolRegistry([
+		Tool(
+			name=DONE_TOOL,
+			description=(
+				"End the task and submit the final answer. This is the only way to finish, and it "
+				"covers BOTH outcomes: if the task succeeded, `answer` is the complete reply for "
+				"the user; if it cannot be completed, call this anyway and use `answer` to say what "
+				"was tried and why it failed. `answer` must stand on its own - state the actual "
+				"values, file names, and command output you found rather than referring back to "
+				"earlier steps. Call it exactly once, by itself."
+			),
+			input_schema={
+				"type": "object",
+				"properties": {
+					"answer": {"type": "string", "description": "The complete final answer, or the reason the task failed."},
+				},
+				"required": ["answer"],
+			},
+			execute=done,
 		),
-		input_schema={
-			"type": "object",
-			"properties": {
-				"answer": {"type": "string", "description": "The complete final answer, or the reason the task failed."},
+		Tool(
+			name="multiply",
+			description="Use this for all multiplication. Never compute products yourself.",
+			input_schema={
+				"type": "object",
+				"properties": {
+					"a": {"type": "number", "description": "First factor."},
+					"b": {"type": "number", "description": "Second factor."},
+					"c": {"type": "number", "description": "Optional third factor."},
+				},
+				"required": ["a", "b"],
 			},
-			"required": ["answer"],
-		},
-		execute=done,
-	),
-	Tool(
-		name="multiply",
-		description="Use this for all multiplication. Never compute products yourself.",
-		input_schema={
-			"type": "object",
-			"properties": {
-				"a": {"type": "number", "description": "First factor."},
-				"b": {"type": "number", "description": "Second factor."},
-				"c": {"type": "number", "description": "Optional third factor."},
-			},
-			"required": ["a", "b"],
-		},
-		execute=multiply,
-	),
-	Tool(
-		name="get_today_date",
-		description="Return today's date as month, day, and year.",
-		input_schema={"type": "object", "properties": {}},
-		execute=get_today_date,
-	),
-	Tool(
-		name="substract",
-		description="Use this for all substraction. Never compute yourself.",
-		input_schema={
-			"type": "object",
-			"properties": {
-				"a": {"type": "integer", "description": "Minuend."},
-				"b": {"type": "integer", "description": "Subtrahend."},
-			},
-			"required": ["a", "b"],
-		},
-		execute=substract,
-	),
-	Tool(
-		name="fs_list",
-		description=(
-			"List files and directories under a path (relative to the working directory). "
-			"Skips .git, node_modules, __pycache__, and virtualenvs."
+			execute=multiply,
 		),
-		input_schema={
-			"type": "object",
-			"properties": {
-				"path": {"type": "string", "description": "Directory to list. Defaults to '.'."},
-				"recursive": {"type": "boolean", "description": "Walk subdirectories. Defaults to false."},
-				"max_entries": {"type": "integer", "description": "Cap on returned entries. Defaults to 200."},
-			},
-		},
-		execute=fs_list,
-	),
-	Tool(
-		name="fs_read",
-		description=(
-			"Read a text file and return its contents with line numbers. "
-			"Use start_line/end_line to read a slice of a large file."
+		Tool(
+			name="get_today_date",
+			description="Return today's date as month, day, and year.",
+			input_schema={"type": "object", "properties": {}},
+			execute=get_today_date,
 		),
-		input_schema={
-			"type": "object",
-			"properties": {
-				"path": {"type": "string", "description": "File path relative to the working directory."},
-				"start_line": {"type": "integer", "description": "First line to return (1-based, inclusive)."},
-				"end_line": {"type": "integer", "description": "Last line to return (1-based, inclusive)."},
+		Tool(
+			name="substract",
+			description="Use this for all substraction. Never compute yourself.",
+			input_schema={
+				"type": "object",
+				"properties": {
+					"a": {"type": "integer", "description": "Minuend."},
+					"b": {"type": "integer", "description": "Subtrahend."},
+				},
+				"required": ["a", "b"],
 			},
-			"required": ["path"],
-		},
-		execute=fs_read,
-	),
-	Tool(
-		name="fs_search",
-		description=(
-			"Search file contents for a pattern (grep). Returns matching lines as file:line: text."
+			execute=substract,
 		),
-		input_schema={
-			"type": "object",
-			"properties": {
-				"pattern": {"type": "string", "description": "Regex (default) or literal text to find."},
-				"path": {"type": "string", "description": "File or directory to search. Defaults to '.'."},
-				"glob": {"type": "string", "description": "Only search files whose name matches, e.g. '*.py'."},
-				"regex": {"type": "boolean", "description": "Treat pattern as a regex. Defaults to true."},
-				"case_sensitive": {"type": "boolean", "description": "Defaults to false."},
-				"max_results": {"type": "integer", "description": "Cap on returned matches. Defaults to 100."},
+		Tool(
+			name="fs_list",
+			description=(
+				"List files and directories under a path (relative to the working directory). "
+				"Skips .git, node_modules, __pycache__, and virtualenvs."
+			),
+			input_schema={
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "Directory to list. Defaults to '.'."},
+					"recursive": {"type": "boolean", "description": "Walk subdirectories. Defaults to false."},
+					"max_entries": {"type": "integer", "description": "Cap on returned entries. Defaults to 200."},
+				},
 			},
-			"required": ["pattern"],
-		},
-		execute=fs_search,
-	),
-	Tool(
-		name="fs_patch",
-		description=(
-			"Edit a file by replacing an exact string. old_string must appear exactly once unless "
-			"replace_all is true. To create a new file, pass old_string='' and the full contents as new_string. "
-			"Read the file first so old_string matches exactly."
+			execute=bind(fs_list),
 		),
-		input_schema={
-			"type": "object",
-			"properties": {
-				"path": {"type": "string", "description": "File path relative to the working directory."},
-				"old_string": {"type": "string", "description": "Exact text to replace ('' to create a new file)."},
-				"new_string": {"type": "string", "description": "Replacement text."},
-				"replace_all": {"type": "boolean", "description": "Replace every occurrence. Defaults to false."},
+		Tool(
+			name="fs_read",
+			description=(
+				"Read a text file and return its contents with line numbers. "
+				"Use start_line/end_line to read a slice of a large file."
+			),
+			input_schema={
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "File path relative to the working directory."},
+					"start_line": {"type": "integer", "description": "First line to return (1-based, inclusive)."},
+					"end_line": {"type": "integer", "description": "Last line to return (1-based, inclusive)."},
+				},
+				"required": ["path"],
 			},
-			"required": ["path", "old_string", "new_string"],
-		},
-		execute=fs_patch,
-	),
-	Tool(
-		name="shell_run",
-		description=(
-			"Run a shell command in the working directory and return exit code, stdout, and stderr. "
-			"Output is truncated; use timeout_s for long-running commands."
+			execute=bind(fs_read),
 		),
-		input_schema={
-			"type": "object",
-			"properties": {
-				"command": {"type": "string", "description": "The command line to run via the shell."},
-				"cwd": {"type": "string", "description": "Subdirectory to run in. Defaults to the working directory."},
-				"timeout_s": {"type": "number", "description": "Kill the command after this many seconds. Defaults to 30."},
+		Tool(
+			name="fs_search",
+			description=(
+				"Search file contents for a pattern (grep). Returns matching lines as file:line: text."
+			),
+			input_schema={
+				"type": "object",
+				"properties": {
+					"pattern": {"type": "string", "description": "Regex (default) or literal text to find."},
+					"path": {"type": "string", "description": "File or directory to search. Defaults to '.'."},
+					"glob": {"type": "string", "description": "Only search files whose name matches, e.g. '*.py'."},
+					"regex": {"type": "boolean", "description": "Treat pattern as a regex. Defaults to true."},
+					"case_sensitive": {"type": "boolean", "description": "Defaults to false."},
+					"max_results": {"type": "integer", "description": "Cap on returned matches. Defaults to 100."},
+				},
+				"required": ["pattern"],
 			},
-			"required": ["command"],
-		},
-		execute=shell_run,
-	),
-])
+			execute=bind(fs_search),
+		),
+		Tool(
+			name="fs_patch",
+			description=(
+				"Edit a file by replacing an exact string. old_string must appear exactly once unless "
+				"replace_all is true. To create a new file, pass old_string='' and the full contents as new_string. "
+				"Read the file first so old_string matches exactly."
+			),
+			input_schema={
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "File path relative to the working directory."},
+					"old_string": {"type": "string", "description": "Exact text to replace ('' to create a new file)."},
+					"new_string": {"type": "string", "description": "Replacement text."},
+					"replace_all": {"type": "boolean", "description": "Replace every occurrence. Defaults to false."},
+				},
+				"required": ["path", "old_string", "new_string"],
+			},
+			execute=bind(fs_patch),
+		),
+		Tool(
+			name="shell_run",
+			description=(
+				"Run a shell command in the working directory and return exit code, stdout, and stderr. "
+				"Output is truncated; use timeout_s for long-running commands."
+			),
+			input_schema={
+				"type": "object",
+				"properties": {
+					"command": {"type": "string", "description": "The command line to run via the shell."},
+					"cwd": {"type": "string", "description": "Subdirectory to run in. Defaults to the working directory."},
+					"timeout_s": {"type": "number", "description": "Kill the command after this many seconds. Defaults to 30."},
+				},
+				"required": ["command"],
+			},
+			execute=bind(shell_run),
+		),
+	])

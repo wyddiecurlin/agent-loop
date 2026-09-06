@@ -14,11 +14,9 @@ from openai import (
 	RateLimitError,
 )
 import json
-import shutil
-import subprocess
-from pathlib import Path
 
-from tools import DONE_TOOL, REGISTRY, ToolCall, ToolResult
+from runtime import Runtime, make_runtime
+from tools import DONE_TOOL, ToolCall, ToolResult, build_registry
 
 
 DEFAULT_MODEL = "gpt-5.4-nano"  # fastest OpenAI TTFT (~0.67s) with reasoning off
@@ -494,7 +492,7 @@ def generate(
 	load_dotenv()
 
 	if tools is None:
-		tools = REGISTRY.schema()
+		raise ValueError("tools is required: build it with build_registry(runtime).schema()")
 	if provider is None:
 		provider = make_provider(timeout=timeout)
 	if model is None:
@@ -536,12 +534,16 @@ SYSTEM_PROMPT = '''
 '''
 
 
-def agent_loop(prompt, max_steps: int = 20) -> list:
+def agent_loop(prompt, runtime: Runtime, max_steps: int = 120) -> list:
 	"""Run tools until the model calls `done`.
 
 	tool_choice="required" makes every turn carry at least one tool call, so `done` is the
 	only exit and the loop never has to guess whether a plain-text reply meant "finished".
+
+	Every tool the model can reach is bound to `runtime`, so the loop cannot act outside
+	the sandbox it was handed - there is no other registry to reach for.
 	"""
+	registry = build_registry(runtime)
 	messages: list[InputItem] = [
 		Message(role='system', content=SYSTEM_PROMPT),
 		Message(role='user', content=prompt),
@@ -551,7 +553,7 @@ def agent_loop(prompt, max_steps: int = 20) -> list:
 		print(f"[LOG] loop start 1 message length {len(messages)}")
 		turn = generate(
 			messages=messages,
-			tools=REGISTRY.schema(),
+			tools=registry.schema(),
 			tool_choice="required",
 			stream=True,
 			on_text=stream,
@@ -560,7 +562,6 @@ def agent_loop(prompt, max_steps: int = 20) -> list:
 		print(json.dumps(asdict(turn), indent=2))
 		print()
 
-		# Any preamble text, then the calls themselves, so the model can see what it asked for.
 		if turn.text:
 			messages.append(Message(role='assistant', content=turn.text))
 		for call in turn.tool_calls or []:
@@ -572,7 +573,7 @@ def agent_loop(prompt, max_steps: int = 20) -> list:
 			))
 
 		for call in turn.tool_calls or []:
-			result: ToolResult = REGISTRY.execute(call)
+			result: ToolResult = registry.execute(call)
 			print(f"[LOG]   {result.output[:300]}")
 			messages.append(FunctionCallOutputItem(
 				type='function_call_output',
@@ -585,7 +586,7 @@ def agent_loop(prompt, max_steps: int = 20) -> list:
 				messages.append(Message(role='assistant', content=result.output))
 				return messages
 
-	print("[LOG]   hit max_steps")
+	print(f"[LOG] hit max_steps {max_steps}")
 	return messages
 
 
@@ -593,7 +594,7 @@ def agent_loop(prompt, max_steps: int = 20) -> list:
 # Test harness
 # ---------------------------------------------------------------------------
 
-SANDBOX = Path("sandbox")
+SANDBOX = "sandbox"
 
 SANDBOX_FILES = {
 	"notes.txt": "The answer is 42\nsecond line\nthird line: banana\n",
@@ -609,17 +610,18 @@ SANDBOX_FILES = {
 }
 
 
-def setup_sandbox() -> None:
-	"""Fresh sandbox/ tree with known contents so the fs/shell tests are deterministic."""
-	shutil.rmtree(SANDBOX, ignore_errors=True)
-	for rel, content in SANDBOX_FILES.items():
-		path = SANDBOX / rel
-		path.parent.mkdir(parents=True, exist_ok=True)
-		path.write_text(content)
+def setup_sandbox(runtime: Runtime) -> None:
+	"""Fresh sandbox/ tree with known contents so the fs/shell tests are deterministic.
+
+	One put() rather than a write() per file: on a remote runtime the difference is one
+	round trip versus len(SANDBOX_FILES) of them.
+	"""
+	runtime.remove(SANDBOX)
+	runtime.put({f"{SANDBOX}/{rel}": content for rel, content in SANDBOX_FILES.items()})
 
 
-def teardown_sandbox() -> None:
-	shutil.rmtree(SANDBOX, ignore_errors=True)
+def teardown_sandbox(runtime: Runtime) -> None:
+	runtime.remove(SANDBOX)
 
 
 def final_text(messages: list[InputItem] | None) -> str:
@@ -643,25 +645,25 @@ def check(label: str, passed: bool, detail: str = "") -> bool:
 	return passed
 
 
-def run_case(n: int, prompt: str) -> str:
+def run_case(n: int, runtime: Runtime, prompt: str) -> str:
 	print(f"\n{'=' * 70}\nTest case {n}: {prompt}\n{'=' * 70}")
-	messages = agent_loop(prompt=prompt)
+	messages = agent_loop(prompt=prompt, runtime=runtime)
 	return final_text(messages)
 
 
-def main() -> None:
+def run_suite(runtime: Runtime) -> None:
 	results: list[bool] = []
 
 	# --- arithmetic / date tools -------------------------------------------------
 
-	answer = run_case(1, "Get today's date and compute the multiplication of month, day, and year.")
+	answer = run_case(1, runtime, "Get today's date and compute the multiplication of month, day, and year.")
 	from datetime import datetime
 	today = datetime.now()
 	expected = today.month * today.day * today.year
 	results.append(check("case 1: product of month*day*year", contains_number(answer, expected), f"expected {expected}"))
 
 	answer = run_case(
-		2,
+		2, runtime,
 		"Multiply month, day, and year of today's date, and do the same for the founding date of "
 		"China's communist party 1949.10.1, and substract the two results.",
 	)
@@ -670,55 +672,70 @@ def main() -> None:
 
 	# --- filesystem / shell tools --------------------------------------------------
 
-	setup_sandbox()
+	setup_sandbox(runtime)
 	try:
 		# 3. fs_list
-		answer = run_case(3, "List every file under the sandbox directory, recursively, and tell me how many files there are.")
+		answer = run_case(3, runtime, "List every file under the sandbox directory, recursively, and tell me how many files there are.")
 		results.append(check(
 			"case 3: fs_list finds all 3 files",
 			"3" in answer and "notes.txt" in answer and "app.py" in answer and "config.json" in answer,
 		))
 
 		# 4. fs_read
-		answer = run_case(4, "Read sandbox/data/config.json and tell me the version number it contains.")
+		answer = run_case(4, runtime, "Read sandbox/data/config.json and tell me the version number it contains.")
 		results.append(check("case 4: fs_read reports version", "1.2.3" in answer))
 
 		# 5. fs_search
-		answer = run_case(5, "Search the sandbox directory for the word 'banana'. Tell me the file name and the line number it appears on.")
+		answer = run_case(5, runtime, "Search the sandbox directory for the word 'banana'. Tell me the file name and the line number it appears on.")
 		results.append(check("case 5: fs_search locates banana", "notes.txt" in answer and "3" in answer))
 
 		# 6. fs_patch
-		answer = run_case(6, "In sandbox/app.py, change the greeting word 'Hello' to 'Howdy'. Do not change anything else.")
-		app_src = (SANDBOX / "app.py").read_text()
+		answer = run_case(6, runtime, "In sandbox/app.py, change the greeting word 'Hello' to 'Howdy'. Do not change anything else.")
+		app_src = runtime.read_text(f"{SANDBOX}/app.py")
 		results.append(check(
 			"case 6: fs_patch edits app.py in place",
 			"Howdy" in app_src and "Hello" not in app_src and "greet(" in app_src,
 		))
 
 		# 7. shell_run
-		expected_out = subprocess.run(["python3", str(SANDBOX / "app.py")], capture_output=True, text=True).stdout.strip()
-		answer = run_case(7, "Run the shell command `python3 sandbox/app.py` and tell me exactly what it printed.")
+		expected_out = runtime.run(f"python3 {SANDBOX}/app.py").stdout.strip()
+		answer = run_case(7, runtime, "Run the shell command `python3 sandbox/app.py` and tell me exactly what it printed.")
 		results.append(check("case 7: shell_run captures stdout", expected_out in answer, f"expected {expected_out!r}"))
 
 		# 8. combined: list + read/shell + create file + read back
 		answer = run_case(
-			8,
+			8, runtime,
 			"Create a new file sandbox/summary.md containing a markdown bullet list of every file in the sandbox "
 			"directory (recursively) with its line count, for example '- notes.txt: 3 lines'. "
 			"Then read the file back and confirm its contents.",
 		)
-		summary = SANDBOX / "summary.md"
-		body = summary.read_text() if summary.exists() else ""
+		summary_exists = runtime.stat(f"{SANDBOX}/summary.md") is not None
+		body = runtime.read_text(f"{SANDBOX}/summary.md") if summary_exists else ""
 		results.append(check(
 			"case 8: summary.md created with all files",
-			summary.exists() and all(name in body for name in ("notes.txt", "app.py", "config.json")),
-			f"exists={summary.exists()}",
+			summary_exists and all(name in body for name in ("notes.txt", "app.py", "config.json")),
+			f"exists={summary_exists}",
 		))
 	finally:
-		teardown_sandbox()
+		teardown_sandbox(runtime)
 
 	print(f"\n[RESULT] {sum(results)}/{len(results)} test cases passed")
 	print(f"[USAGE] {TRACKER.summary()}")
+
+
+def main() -> None:
+	"""Own the runtime for the whole suite: one sandbox, torn down whatever happens.
+
+	Every case runs against this one runtime, and it is the only handle to a filesystem
+	or a shell in the process - swapping it for DockerRuntime (build step 4) is the only
+	change this file will need.
+	"""
+	runtime = make_runtime()
+	runtime.setup()
+	try:
+		run_suite(runtime)
+	finally:
+		runtime.teardown()
 
 
 if __name__ == "__main__":
