@@ -393,10 +393,48 @@ def shell_run(command: str, cwd: str | None = None, timeout_s: float = 30.0) -> 
 
 
 # ---------------------------------------------------------------------------
+# Task completion
+# ---------------------------------------------------------------------------
+
+DONE_TOOL = "done"
+
+
+def done(answer: str) -> ToolResult:
+	"""Terminal tool: the model calls it to submit its final answer, success or failure.
+
+	agent_loop ends the run on the first ok=True result from this tool. A bad call (no
+	`answer`, or a blank one) comes back ok=False like any other tool error, so the model
+	gets the error and another turn instead of ending the task with nothing to say.
+	"""
+	if not answer.strip():
+		raise ValueError("answer must be a non-empty string holding the full final reply")
+	return ToolResult(ok=True, output=answer, metadata={"final": True})
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
 REGISTRY = ToolRegistry([
+	Tool(
+		name=DONE_TOOL,
+		description=(
+			"End the task and submit the final answer. This is the only way to finish, and it "
+			"covers BOTH outcomes: if the task succeeded, `answer` is the complete reply for "
+			"the user; if it cannot be completed, call this anyway and use `answer` to say what "
+			"was tried and why it failed. `answer` must stand on its own - state the actual "
+			"values, file names, and command output you found rather than referring back to "
+			"earlier steps. Call it exactly once, by itself."
+		),
+		input_schema={
+			"type": "object",
+			"properties": {
+				"answer": {"type": "string", "description": "The complete final answer, or the reason the task failed."},
+			},
+			"required": ["answer"],
+		},
+		execute=done,
+	),
 	Tool(
 		name="multiply",
 		description="Use this for all multiplication. Never compute products yourself.",

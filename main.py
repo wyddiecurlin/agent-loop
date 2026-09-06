@@ -2,7 +2,7 @@ import os
 import random
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Callable, Literal, Protocol, TypedDict
 
 from dotenv import load_dotenv
@@ -18,7 +18,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from tools import REGISTRY, ToolCall, ToolResult
+from tools import DONE_TOOL, REGISTRY, ToolCall, ToolResult
 
 
 DEFAULT_MODEL = "gpt-5.4-nano"  # fastest OpenAI TTFT (~0.67s) with reasoning off
@@ -166,6 +166,7 @@ class Provider(Protocol):
 		on_text: OnText | None,
 		on_tool_call: OnToolCall | None,
 		timeout: float,
+		tool_choice: str | None,
 	) -> ModelTurn: ...
 
 
@@ -184,6 +185,7 @@ class OpenAIProvider:
 		on_text: OnText | None = None,
 		on_tool_call: OnToolCall | None = None,
 		timeout: float = DEFAULT_TIMEOUT_S,
+		tool_choice: str | None = None,
 	) -> ModelTurn:
 		kwargs: dict = {
 			"model": model,
@@ -193,6 +195,8 @@ class OpenAIProvider:
 		}
 		if tools:
 			kwargs["tools"] = tools
+			if tool_choice:
+				kwargs["tool_choice"] = tool_choice
 
 		if stream:
 			with self.client.responses.stream(**kwargs) as s:
@@ -321,6 +325,7 @@ class QwenProvider:
 		on_text: OnText | None = None,
 		on_tool_call: OnToolCall | None = None,
 		timeout: float = DEFAULT_TIMEOUT_S,
+		tool_choice: str | None = None,
 	) -> ModelTurn:
 		kwargs: dict = {
 			"model": model,
@@ -330,7 +335,7 @@ class QwenProvider:
 		}
 		if tools:
 			kwargs["tools"] = self._to_chat_tools(tools)
-			kwargs["tool_choice"] = "auto"
+			kwargs["tool_choice"] = tool_choice or "auto"
 
 		if not stream:
 			resp = self.client.chat.completions.create(**kwargs)
@@ -429,7 +434,15 @@ def default_model(provider_name: str | None = None) -> str:
 # Retries
 # ---------------------------------------------------------------------------
 
-RETRYABLE_ERRORS = (RateLimitError, APIConnectionError, APITimeoutError)
+# openai>=3 vendors its transport as httpx2, and a transport-level timeout on the
+# streaming path reaches us raw rather than wrapped in APITimeoutError - so retry the
+# transport exceptions too, or a slow server kills the whole run.
+try:
+	import httpx2 as _httpx
+except ModuleNotFoundError:  # older SDKs ship plain httpx
+	import httpx as _httpx
+
+RETRYABLE_ERRORS = (RateLimitError, APIConnectionError, APITimeoutError, _httpx.TransportError)
 
 
 def is_retryable(exc: Exception) -> bool:
@@ -475,6 +488,7 @@ def generate(
 	timeout: float = DEFAULT_TIMEOUT_S,
 	max_retries: int = DEFAULT_MAX_RETRIES,
 	tracker: CostTracker | None = None,
+	tool_choice: str | None = None,
 ) -> ModelTurn:
 	"""Generate a ModelTurn for the given messages, with retries, timeout, and cost tracking."""
 	load_dotenv()
@@ -488,7 +502,8 @@ def generate(
 
 	turn = with_retries(
 		lambda: provider.generate(
-			messages, model, tools, stream=stream, on_text=on_text, on_tool_call=on_tool_call, timeout=timeout
+			messages, model, tools, stream=stream, on_text=on_text, on_tool_call=on_tool_call,
+			timeout=timeout, tool_choice=tool_choice,
 		),
 		max_retries=max_retries,
 	)
@@ -506,43 +521,72 @@ def stream_tool_calls(t: str, kind: Literal['function_call', 'function_args']):
 		print(t, end='', flush=True)
 
 
-def agent_loop(prompt) -> None:
-	messages = [
-		Message(role='system', content='You are a helpful assistant'),
-		Message(role='user', content=prompt)
+SYSTEM_PROMPT = '''
+	You are an agent that completes tasks by invoking tools according to user's requests.
+	RULES:
+	- Every turn must call at least one tool; there is no way to reply with plain text.
+	- If you announce that you are going to call a tool, call it in the same turn.
+	- The task ends only when you call `done`, so call it as soon as you have what you need.
+	- Call `done` for either outcome:
+	  - it worked: `answer` is the complete reply for the user.
+	  - it cannot be done: call `done` anyway and use `answer` to say what you tried and
+	    why it failed. Never keep calling tools hoping the problem fixes itself.
+	- `answer` must stand on its own: give the actual values, file names, and command output
+	  you found rather than referring back to earlier steps.
+'''
+
+
+def agent_loop(prompt, max_steps: int = 20) -> list:
+	"""Run tools until the model calls `done`.
+
+	tool_choice="required" makes every turn carry at least one tool call, so `done` is the
+	only exit and the loop never has to guess whether a plain-text reply meant "finished".
+	"""
+	messages: list[InputItem] = [
+		Message(role='system', content=SYSTEM_PROMPT),
+		Message(role='user', content=prompt),
 	]
-	while len(messages)<40:
+
+	for _ in range(max_steps):
 		print(f"[LOG] loop start 1 message length {len(messages)}")
 		turn = generate(
 			messages=messages,
+			tools=REGISTRY.schema(),
+			tool_choice="required",
 			stream=True,
 			on_text=stream,
 			on_tool_call=stream_tool_calls,
-			tools=REGISTRY.schema(),
 		)
+		print(json.dumps(asdict(turn), indent=2))
 		print()
-		# state 2: agent receives current state, emits tool call
-		if turn.tool_calls:
-			print(f"[LOG] turn result {turn.text}, {turn.tool_calls}")
-			if turn.text:
-				messages.append(Message(role='assistant', content=turn.text))
 
-			for tool_call in turn.tool_calls:
-				result: ToolResult = REGISTRY.execute(tool_call)
-				messages.append(FunctionCallItem(type='function_call', name=tool_call.name, arguments=tool_call.arguments, call_id=str(tool_call.id)))
-				print(f"[LOG] calling {tool_call.name} with {tool_call.arguments} -> ok={result.ok} {result.metadata}")
-				print(f"[LOG]   {result.output[:300]}")
-				messages.append(FunctionCallOutputItem(type='function_call_output', output=result.to_model_output(), call_id=str(tool_call.id)))
+		# Any preamble text, then the calls themselves, so the model can see what it asked for.
+		if turn.text:
+			messages.append(Message(role='assistant', content=turn.text))
+		for call in turn.tool_calls or []:
+			messages.append(FunctionCallItem(
+				type='function_call',
+				call_id=str(call.id),
+				name=call.name,
+				arguments=call.arguments,
+			))
 
-			continue
-		
-		else:
-			if turn.text:
-				messages.append(Message(role='assistant', content=turn.text))
-			return messages
-			 
-			
+		for call in turn.tool_calls or []:
+			result: ToolResult = REGISTRY.execute(call)
+			print(f"[LOG]   {result.output[:300]}")
+			messages.append(FunctionCallOutputItem(
+				type='function_call_output',
+				call_id=str(call.id),
+				output=result.to_model_output(),
+			))
+			# `done` hands back the final answer as its output. A malformed call fails like
+			# any other tool, so the model reads the error and gets another turn.
+			if call.name == DONE_TOOL and result.ok:
+				messages.append(Message(role='assistant', content=result.output))
+				return messages
 
+	print("[LOG]   hit max_steps")
+	return messages
 
 
 # ---------------------------------------------------------------------------
@@ -601,7 +645,8 @@ def check(label: str, passed: bool, detail: str = "") -> bool:
 
 def run_case(n: int, prompt: str) -> str:
 	print(f"\n{'=' * 70}\nTest case {n}: {prompt}\n{'=' * 70}")
-	return final_text(agent_loop(prompt=prompt))
+	messages = agent_loop(prompt=prompt)
+	return final_text(messages)
 
 
 def main() -> None:
