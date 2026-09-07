@@ -1,3 +1,4 @@
+# AI_OWNED
 """Run one task, then grade it somewhere the agent could never reach.
 
 The score is an exit code, never something the agent said. `final_text()` is recorded

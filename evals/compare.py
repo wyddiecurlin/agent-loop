@@ -1,3 +1,4 @@
+# AI_OWNED
 """Paired comparison of two eval runs. McNemar, not two pass rates.
 
 	python3 -m evals.compare BEFORE.json AFTER.json

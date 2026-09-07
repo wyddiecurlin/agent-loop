@@ -1,3 +1,4 @@
+# AI_OWNED
 """Entry point for the eval harness. Same Unix contract as `agent_loop`:
 stdout is one JSON object, stderr is the trace, exit code says whether the run finished.
 
