@@ -30,3 +30,8 @@ dist/
 
 # Agent test sandbox
 sandbox/
+
+# Eval runs: per-shard traces are large and reproducible. The merged summaries
+# (evals/results/humaneval.json, mbpp.json) are kept as the record of a scored run.
+evals/results/*_shard*.json
+evals/results/*_shard*.err

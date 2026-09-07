@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Every suite runs where the agent runs: inside the container, launched by ./run.sh.
 #
-#   ./test.sh            lint, then sandbox, then agent
+#   ./test.sh            lint, then sandbox, then evals, then agent
 #   ./test.sh sandbox    runtime conformance + escape, no model
+#   ./test.sh evals      the benchmark score cannot be forged, no model
 #   ./test.sh agent      the 8 end-to-end cases
 #   ./test.sh lint       the boundary is structural (a host-side grep)
 #
@@ -12,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 suite=all
-for a in "$@"; do case $a in lint | sandbox | agent) suite=$a ;; esac; done
+for a in "$@"; do case $a in lint | sandbox | evals | agent) suite=$a ;; esac; done
 want() { [ "$suite" = all ] || [ "$suite" = "$1" ]; }
 
 if want lint; then
@@ -32,6 +33,11 @@ fi
 if want sandbox; then
 	echo "==> sandbox: runtime conformance + escape, inside the container"
 	AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_sandbox
+fi
+
+if want evals; then
+	echo "==> evals: the benchmark score cannot be forged, inside the container"
+	AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_evals
 fi
 
 if want agent; then

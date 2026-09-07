@@ -18,7 +18,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from .runtime import DockerRuntime
 
@@ -299,6 +299,29 @@ def fs_search(
 	)
 
 
+def fs_write(runtime: DockerRuntime, path: str, content: str) -> ToolResult:
+	"""Create `path`, or replace it wholesale. Parent directories are created.
+
+	The counterpart to fs_patch, which can only edit text that is already there. Without
+	this, writing a new file means smuggling it through `shell_run` in a heredoc, and the
+	quoting is a coin flip for a small model - the failure then looks like a reasoning
+	error when it was really an escaping one.
+	"""
+	st = runtime.stat(path)
+	if st is not None and st.is_dir:
+		raise IsADirectoryError(f"{path!r} is a directory")
+
+	runtime.write(path, content)
+	rel = runtime.relpath(path)
+	lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+	verb = "overwrote" if st is not None else "wrote"
+	return ToolResult(
+		ok=True,
+		output=f"{verb} {rel} ({len(content.encode())} bytes, {lines} lines)",
+		metadata={"path": rel, "created": st is None, "bytes": len(content.encode()), "lines": lines},
+	)
+
+
 def fs_patch(runtime: DockerRuntime, path: str, old_string: str, new_string: str, replace_all: bool = False) -> ToolResult:
 	st = runtime.stat(path)
 
@@ -379,15 +402,20 @@ def done(answer: str) -> ToolResult:
 # Registry
 # ---------------------------------------------------------------------------
 
-def build_registry(runtime: DockerRuntime) -> ToolRegistry:
+def build_registry(runtime: DockerRuntime, allow: Iterable[str] | None = None) -> ToolRegistry:
 	"""Every tool that touches the world is bound to `runtime` here.
 
 	This is the enforcement point. There is no module-level registry, so no caller can
 	obtain a filesystem tool without first deciding which runtime it acts on.
+
+	`allow` narrows the set: with it, the model is handed only those tools plus `done`,
+	which is never removable because it is the loop's only exit. A caller that wants the
+	agent to have no shell says so here, and the tool is then absent from the schema the
+	model ever sees - not refused at call time, which would still leave it discoverable.
 	"""
 	bind = lambda fn: partial(fn, runtime)  # noqa: E731
 
-	return ToolRegistry([
+	tools = [
 		Tool(
 			name=DONE_TOOL,
 			description=(
@@ -493,11 +521,28 @@ def build_registry(runtime: DockerRuntime) -> ToolRegistry:
 			execute=bind(fs_search),
 		),
 		Tool(
+			name="fs_write",
+			description=(
+				"Create a file, or replace an existing one entirely, with `content`. Parent directories "
+				"are created. This is the tool for writing a new file - do not build one with shell "
+				"redirection or a heredoc. To change part of a file that already exists, use fs_patch."
+			),
+			input_schema={
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "File path relative to the working directory."},
+					"content": {"type": "string", "description": "The complete contents of the file."},
+				},
+				"required": ["path", "content"],
+			},
+			execute=bind(fs_write),
+		),
+		Tool(
 			name="fs_patch",
 			description=(
-				"Edit a file by replacing an exact string. old_string must appear exactly once unless "
-				"replace_all is true. To create a new file, pass old_string='' and the full contents as new_string. "
-				"Read the file first so old_string matches exactly."
+				"Edit an existing file by replacing an exact string. old_string must appear exactly once "
+				"unless replace_all is true. Read the file first so old_string matches exactly. "
+				"To create a new file or rewrite one from scratch, use fs_write instead."
 			),
 			input_schema={
 				"type": "object",
@@ -528,4 +573,13 @@ def build_registry(runtime: DockerRuntime) -> ToolRegistry:
 			},
 			execute=bind(shell_run),
 		),
-	])
+	]
+
+	if allow is not None:
+		keep = set(allow) | {DONE_TOOL}
+		unknown = keep - {t.name for t in tools}
+		if unknown:
+			raise ValueError(f"unknown tool(s) in allow: {sorted(unknown)}")
+		tools = [t for t in tools if t.name in keep]
+
+	return ToolRegistry(tools)

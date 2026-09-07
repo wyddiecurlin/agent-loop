@@ -9,7 +9,7 @@ All narration goes to stderr. stdout belongs to the result JSON (see __main__.py
 import json
 import sys
 from dataclasses import asdict
-from typing import Literal
+from typing import Iterable, Literal
 
 from .providers import (
 	DEFAULT_MAX_RETRIES,
@@ -103,18 +103,25 @@ SYSTEM_PROMPT = '''
 '''
 
 
-def agent_loop(prompt, runtime: DockerRuntime, max_steps: int = 120) -> list:
+def agent_loop(
+	prompt,
+	runtime: DockerRuntime,
+	max_steps: int = 120,
+	tools: Iterable[str] | None = None,
+	system_prompt: str = SYSTEM_PROMPT,
+) -> list:
 	"""Run tools until the model calls `done`.
 
 	tool_choice="required" makes every turn carry at least one tool call, so `done` is the
 	only exit and the loop never has to guess whether a plain-text reply meant "finished".
 
 	Every tool the model can reach is bound to `runtime`, so the loop cannot act outside
-	the sandbox it was handed - there is no other registry to reach for.
+	the sandbox it was handed - there is no other registry to reach for. `tools` narrows
+	that set further; see build_registry.
 	"""
-	registry = build_registry(runtime)
+	registry = build_registry(runtime, allow=tools)
 	messages: list[InputItem] = [
-		Message(role='system', content=SYSTEM_PROMPT),
+		Message(role='system', content=system_prompt),
 		Message(role='user', content=prompt),
 	]
 

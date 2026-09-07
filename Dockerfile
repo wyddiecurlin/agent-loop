@@ -1,4 +1,4 @@
-# One image, one topology: the agent always runs inside it (see RUNTIME.md).
+# One image, one topology: the agent always runs inside it (see docs/RUNTIME.md).
 # Two stages so test code never ships to prod.
 #
 #   docker build --target dev  -t agent-loop:dev  .
@@ -24,8 +24,17 @@ RUN groupadd work && useradd -M -d /tmp -g work sandbox \
  && mkdir -p /work && chgrp work /work && chmod 2775 /work \
  && git config --system safe.directory '*'
 
+# /app is the agent's own code and, in the test stage, the eval datasets -- which carry the
+# reference solutions. Model-written commands run as `sandbox`, so 700 is what stops one of
+# them reading its own source, or the answers, straight off disk. Root (the agent) is
+# unaffected: it owns the files and ignores the mode.
+RUN chmod 700 /app
+
 WORKDIR /work
 ENTRYPOINT ["python", "-m", "agent_loop"]
 
 FROM dev AS test
 COPY tests/ /app/tests/
+COPY evals/ /app/evals/
+# Re-assert after the COPYs above, which recreate /app's children.
+RUN chmod 700 /app
