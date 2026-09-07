@@ -3,18 +3,23 @@
 A Provider turns messages + tools into a ModelTurn. Everything above this module
 sees only ModelTurn, so adding a backend never reaches the loop.
 
-Two wire shapes, five backends:
+Two wire shapes, four backends:
 
   Responses API      openai
-  Chat Completions   fireworks | together | baseten | qwen (self-hosted vLLM)
+  Chat Completions   fireworks | together | qwen (self-hosted vLLM)
 
-The four Chat Completions backends share one class. They differ in a base URL, a key,
+The three Chat Completions backends share one class. They differ in a base URL, a key,
 the model ids they answer to, and how they express "do not think" - which is the whole
-of `Backend` below.
+of `Backend` below. Everything that is not an OpenAI parameter goes in `extra_body`
+regardless of platform, because the SDK checks names before the server ever sees them.
+
+Fireworks and Together serve the same six models, so `FallbackProvider` pairs them: when
+Fireworks will not serve a request, the same weights are one alias lookup away.
 """
 
 import os
 import random
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Literal, Protocol, TypedDict
@@ -43,7 +48,7 @@ DEFAULT_REASONING_EFFORT = "none"  # no reasoning tokens before the first output
 DEFAULT_TIMEOUT_S = 600.0
 DEFAULT_MAX_RETRIES = 3
 
-# Provider selection: PROVIDER=openai (default) | fireworks | together | baseten | qwen
+# Provider selection: PROVIDER=openai (default) | fireworks | together | qwen
 DEFAULT_PROVIDER = "openai"
 QWEN_BASE_URL = "http://localhost:9000/v1"
 QWEN_MODEL = "qwen3.5-9b"
@@ -82,10 +87,12 @@ DEFAULT_MAX_OUTPUT_TOKENS = 8192
 # Catalog: what each platform serves, what it costs, and how it reasons
 # ---------------------------------------------------------------------------
 #
-# The same six models are sold by three platforms at three different prices, and two of
-# them serve `zai-org/GLM-5.3` under that identical id at different cached-input rates -
-# so the model id alone cannot bill a call, and every price lookup is keyed by the pair.
-# Getting this wrong is not a crash; it is a plausible-looking invoice that is 2x off.
+# The same six models are sold by two platforms at two different prices, so a price
+# lookup is keyed by (platform, id) and not by id. The two ids in play happen not to
+# collide today; Baseten, evaluated and dropped, served GLM 5.3 under the identical
+# string `zai-org/GLM-5.3` at a different cached rate, and an id-keyed table billed it at
+# Together's. That is not a crash - it is a plausible-looking invoice that is 2x off, so
+# the key stays a pair and the next platform cannot reintroduce the bug.
 #
 # Prices are USD per 1M tokens, read from each platform's own pricing page on 2026-09-07
 # and unverified since. `./test.sh pricing` re-reads them; if a number here disagrees
@@ -115,8 +122,11 @@ _M = 1_048_576
 
 CATALOG: dict[str, dict[str, Model]] = {
 	"fireworks": {
-		"deepseek-v4-pro":  Model("accounts/fireworks/models/deepseek-v4-pro",  1.32, 0.044, 3.96, _TOGGLEABLE, _M),
-		"deepseek-v4-flash": Model("accounts/fireworks/models/deepseek-v4-flash", 0.22, 0.007, 0.66, _TOGGLEABLE, _M),
+		# Both platforms are pinned to a dated build. `deepseek-v4-pro` also resolves on
+		# Fireworks and floats to whatever is current, which would silently change what a
+		# stored eval number means.
+		"deepseek-v4-pro":  Model("accounts/fireworks/models/deepseek-v4-pro-0813",   1.32, 0.044, 3.96, _TOGGLEABLE, _M),
+		"deepseek-v4-flash": Model("accounts/fireworks/models/deepseek-v4-flash-0731", 0.22, 0.007, 0.66, _TOGGLEABLE, _M),
 		"glm-5.3":          Model("accounts/fireworks/models/glm-5p3",          1.40, 0.26,  4.40, _ALWAYS_ON,  _M, 32_768),
 		"glm-5.3-flash":    Model("accounts/fireworks/models/glm-5p3-flash",    0.15, 0.03,  0.50, _ALWAYS_ON,  _M, 32_768),
 		"kimi-k3":          Model("accounts/fireworks/models/kimi-k3",          3.00, 0.30, 15.00, _ALWAYS_ON,  _M, 32_768),
@@ -133,15 +143,6 @@ CATALOG: dict[str, dict[str, Model]] = {
 		# rate, which over-states the cost rather than under-stating it.
 		"qwen-3.7-plus":    Model("Qwen/Qwen3.7-Plus",                  0.32, 0.32, 1.28, _TOGGLEABLE, 1_000_000),
 		"qwen-3.8-max":     Model("Qwen/Qwen3.8-2.4T-A95B",             2.00, 0.25, 6.00, _TOGGLEABLE, _M),
-	},
-	# Baseten's Model APIs catalog carries neither Qwen tier, so a Qwen run here is a
-	# KeyError rather than a silent fallback to a different model.
-	"baseten": {
-		"deepseek-v4-pro":  Model("deepseek-ai/DeepSeek-V4-Pro",  1.32, 0.13, 3.96, _TOGGLEABLE, _M),
-		"deepseek-v4-flash": Model("deepseek-ai/DeepSeek-V4-Flash", 0.13, 0.03, 0.26, _TOGGLEABLE, _M),
-		"glm-5.3":          Model("zai-org/GLM-5.3",              1.40, 0.14, 4.40, _ALWAYS_ON,  _M, 32_768),
-		"glm-5.3-flash":    Model("zai-org/GLM-5.3-Flash",        0.15, 0.03, 0.50, _ALWAYS_ON,  _M, 32_768),
-		"kimi-k3":          Model("moonshotai/Kimi-K3",           3.00, 0.30, 15.00, _ALWAYS_ON, _M, 32_768),
 	},
 	# Self-hosted vLLM on the local box: the GPU is already paid for, so per-token is 0.
 	"qwen": {
@@ -187,6 +188,19 @@ def model_spec(model_id: str, provider: str) -> Model | None:
 	return None
 
 
+def alias_for(model_id: str, provider: str) -> str | None:
+	"""The portable name behind a platform's id, or None if the catalog does not know it.
+
+	This is what makes a fallback possible at all: `accounts/fireworks/models/glm-5p3`
+	and `zai-org/GLM-5.3` are the same weights under two names, so failing over means
+	going back through the alias, never re-sending the id.
+	"""
+	for alias, entry in CATALOG.get(provider, {}).items():
+		if entry.id == model_id:
+			return alias
+	return None
+
+
 # ---------------------------------------------------------------------------
 # Usage and cost
 # ---------------------------------------------------------------------------
@@ -198,6 +212,11 @@ class Usage:
 	output_tokens: int = 0
 	reasoning_tokens: int = 0  # subset of output_tokens
 	cost_usd: float = 0.0
+	# Calls this Usage covers that the primary platform refused and the fallback served.
+	# It rides here rather than in a counter of its own because everything downstream -
+	# the tracker, the per-task deltas in evals/harness.py, the merge across 24 shards -
+	# already sums Usage, and a fallback nobody can see is a bill nobody can explain.
+	fallback_calls: int = 0
 
 	@property
 	def total_tokens(self) -> int:
@@ -210,6 +229,7 @@ class Usage:
 			output_tokens=self.output_tokens + other.output_tokens,
 			reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
 			cost_usd=self.cost_usd + other.cost_usd,
+			fallback_calls=self.fallback_calls + other.fallback_calls,
 		)
 
 
@@ -253,6 +273,7 @@ class CostTracker:
 			f"output={u.output_tokens} (reasoning={u.reasoning_tokens}) "
 			f"total={u.total_tokens} "
 			f"cost=${u.cost_usd:.6f}"
+			+ (f" fallback={u.fallback_calls}" if u.fallback_calls else "")
 		)
 
 
@@ -416,9 +437,6 @@ class Backend:
 	# "effort"        -> OpenAI's reasoning_effort, what the hosted platforms take
 	# "chat_template" -> vLLM's chat_template_kwargs.enable_thinking flag
 	reasoning_style: Literal["effort", "chat_template"] = "effort"
-	# top_k is not an OpenAI parameter. vLLM takes it in extra_body; Fireworks, Together
-	# and Baseten accept it top-level.
-	top_k_in_extra_body: bool = False
 
 
 BACKENDS: dict[str, Backend] = {
@@ -426,11 +444,8 @@ BACKENDS: dict[str, Backend] = {
 		"fireworks", "https://api.fireworks.ai/inference/v1", "FIREWORKS_BASE_URL", "FIREWORKS_API_KEY"),
 	"together": Backend(
 		"together", "https://api.together.xyz/v1", "TOGETHER_BASE_URL", "TOGETHER_API_KEY"),
-	"baseten": Backend(
-		"baseten", "https://inference.baseten.co/v1", "BASETEN_BASE_URL", "BASETEN_API_KEY"),
 	"qwen": Backend(
-		"qwen", QWEN_BASE_URL, "QWEN_BASE_URL", "QWEN_API_KEY",
-		reasoning_style="chat_template", top_k_in_extra_body=True),
+		"qwen", QWEN_BASE_URL, "QWEN_BASE_URL", "QWEN_API_KEY", reasoning_style="chat_template"),
 }
 
 
@@ -565,10 +580,11 @@ class ChatProvider:
 			"seed": self.seed,
 			"max_tokens": self.max_output_tokens or (spec.max_output if spec else DEFAULT_MAX_OUTPUT_TOKENS),
 		}
-		if self.backend.top_k_in_extra_body:
-			extra_body["top_k"] = DEFAULT_TOP_K
-		else:
-			kwargs["top_k"] = DEFAULT_TOP_K
+		# top_k is not an OpenAI parameter, so extra_body is the only way past the SDK -
+		# which validates keyword names against its own signature and raises before the
+		# request is ever sent, whatever the server would have accepted. Fireworks
+		# documents top_k as top-level and it still has to travel down here.
+		extra_body["top_k"] = DEFAULT_TOP_K
 		self._reasoning(kwargs, extra_body, spec)
 		if extra_body:
 			kwargs["extra_body"] = extra_body
@@ -656,16 +672,107 @@ class QwenProvider(ChatProvider):
 		super().__init__(backend="qwen", **kw)
 
 
+# ---------------------------------------------------------------------------
+# Falling over to the second platform
+# ---------------------------------------------------------------------------
+
+def can_fail_over(exc: Exception) -> bool:
+	"""True when the *platform* would not serve the request; false when the request is
+	the problem.
+
+	The distinction is the whole value of the check. A 400 is a malformed request and
+	will be just as malformed on the second platform, so failing over on it pays twice
+	for the same rejection and hides the bug. A 503, a 429, a timeout, a dead key or a
+	model that is not there are all "ask someone else", and are what this exists for.
+	"""
+	if is_retryable(exc):  # 5xx, timeouts, transport, and RateLimitError
+		return True
+	# By status rather than by exception class, so this does not quietly depend on the SDK
+	# still mapping 429 to RateLimitError: 401/403 a bad or missing key, 404 a model this
+	# platform does not serve, 408/429 a request it would not take right now.
+	return isinstance(exc, APIStatusError) and exc.status_code in (401, 403, 404, 408, 429)
+
+
+class FallbackProvider:
+	"""The same model on a second platform when the first will not serve it.
+
+	Only the alias travels. `accounts/fireworks/models/glm-5p3` means nothing to Together,
+	so the id is resolved back through the catalog and forward again - and if the second
+	platform does not serve that model at all, the original error is raised rather than a
+	quietly different model being run.
+
+	The fall-over is eager: the first 503 goes to Together rather than sleeping through a
+	backoff. `with_retries` still wraps this from the loop, so both platforms failing is
+	what gets retried, and the pair is tried up to `DEFAULT_MAX_RETRIES + 1` times.
+
+	Every fall-over is counted into Usage.fallback_calls and narrated on stderr. Silence
+	here would be the expensive kind: a mistyped FIREWORKS_API_KEY sends an entire eval to
+	the more expensive platform and the only evidence would be the invoice.
+	"""
+
+	def __init__(self, primary: ChatProvider, secondary: ChatProvider):
+		self.primary, self.secondary = primary, secondary
+
+	def _twin(self, model: str) -> str | None:
+		"""The secondary's id for the same weights, or None if it cannot serve them."""
+		alias = alias_for(model, self.primary.backend.name)
+		entry = CATALOG[self.secondary.backend.name].get(alias) if alias else None
+		return entry.id if entry else None
+
+	def generate(self, messages: Messages, model: str, tools: list[dict] | None, **kw) -> ModelTurn:
+		try:
+			return self.primary.generate(messages, model, tools, **kw)
+		except Exception as exc:
+			twin = self._twin(model)
+			if twin is None or not can_fail_over(exc):
+				raise
+			print(f"[fallback] {self.primary.backend.name} -> {self.secondary.backend.name} "
+			      f"({type(exc).__name__}: {exc}); retrying as {twin}", file=sys.stderr, flush=True)
+			turn = self.secondary.generate(messages, twin, tools, **kw)
+			# Attribute the call before it reaches the tracker. A turn with no usage still
+			# gets one, or a fallback that returned nothing would not be counted.
+			turn.usage = (turn.usage or Usage())
+			turn.usage.fallback_calls += 1
+			return turn
+
+
+# Who covers for whom when the primary will not serve. Fireworks and Together carry the
+# same six models, so the pair is free; nothing covers for the local box, because a
+# fallback that leaves the machine is a different experiment, not the same one.
+DEFAULT_FALLBACK: dict[str, str] = {"fireworks": "together"}
+
+
+def _chat_provider(name: str, timeout: float) -> ChatProvider:
+	backend = BACKENDS[name]
+	# vLLM is happy without a key; a hosted platform is not, and finding that out on
+	# request 1 beats finding it out on request 200 of an eval shard.
+	if name != "qwen" and not os.getenv(backend.api_key_env):
+		raise RuntimeError(f"{backend.api_key_env} is not set in the environment or .env")
+	return ChatProvider(backend=backend, timeout=timeout)
+
+
 def make_provider(name: str | None = None, timeout: float = DEFAULT_TIMEOUT_S) -> Provider:
-	"""Build the provider named by `name` (or the PROVIDER env var)."""
+	"""Build the provider named by `name` (or the PROVIDER env var), and its fallback.
+
+	FALLBACK names the second platform; "none" or "" turns it off. Unset, Fireworks pairs
+	with Together. Asking for a fallback whose key is missing is an error - but *not*
+	having asked, and silently getting none, is only a warning, because the run is still
+	the run the operator described.
+	"""
 	name = (name or os.getenv("PROVIDER", DEFAULT_PROVIDER)).lower()
 	if name in BACKENDS:
-		backend = BACKENDS[name]
-		# vLLM is happy without a key; a hosted platform is not, and finding that out on
-		# request 1 beats finding it out on request 200 of an eval shard.
-		if name != "qwen" and not os.getenv(backend.api_key_env):
-			raise RuntimeError(f"{backend.api_key_env} is not set in the environment or .env")
-		return ChatProvider(backend=backend, timeout=timeout)
+		primary = _chat_provider(name, timeout)
+		requested = os.getenv("FALLBACK")
+		second = (requested if requested is not None else DEFAULT_FALLBACK.get(name, "")).lower()
+		if second in ("", "none"):
+			return primary
+		if second not in BACKENDS or second == name:
+			raise ValueError(f"unknown FALLBACK {second!r} (expected one of: {', '.join(BACKENDS)})")
+		if requested is None and not os.getenv(BACKENDS[second].api_key_env):
+			print(f"[fallback] none: {name} has no cover because "
+			      f"{BACKENDS[second].api_key_env} is not set", file=sys.stderr, flush=True)
+			return primary
+		return FallbackProvider(primary, _chat_provider(second, timeout))
 	# NOTE: OpenAIProvider deliberately sends neither temperature nor seed. The Responses
 	# API reasoning models (gpt-5*) reject `temperature` outright, so there is no greedy
 	# setting to ask for - an OpenAI run cannot be made as repeatable as the others.
@@ -684,7 +791,6 @@ DEFAULT_MODELS: dict[str, str] = {
 	"qwen": QWEN_MODEL,
 	"fireworks": "glm-5.3-flash",
 	"together": "glm-5.3-flash",
-	"baseten": "glm-5.3-flash",
 }
 
 
