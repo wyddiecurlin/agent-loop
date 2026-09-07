@@ -39,6 +39,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 	                    "--offset/--limit. To re-run a run's failures:  --ids \"$(python3 -c "
 	                    "'import json,sys; print(\",\".join(r[\"task_id\"] for r in "
 	                    "json.load(open(sys.argv[1]))[\"results\"] if not r[\"passed\"]))' FILE)\"")
+	p.add_argument("--shard", default="",
+	               help="'I/N' - run every Nth task starting at I. Striped, not blocked: long "
+	                    "tasks are spread across shards, so wall clock is not set by whichever "
+	                    "shard drew the slow ones. Applied after --ids/--offset/--limit.")
 	p.add_argument("--max-steps", type=int, default=MAX_STEPS)
 	p.add_argument("--no-shell", action="store_true",
 	               help="withhold shell_run: scores one-shot writing with no chance to run the code")
@@ -70,6 +74,12 @@ def main(argv: list[str] | None = None) -> int:
 		tasks = tasks[args.offset:]
 		if args.limit:
 			tasks = tasks[: args.limit]
+
+	if args.shard:
+		i, n = (int(x) for x in args.shard.split("/"))
+		if not 0 <= i < n:
+			raise SystemExit(f"--shard {args.shard}: need 0 <= I < N")
+		tasks = tasks[i::n]
 
 	tools = EVAL_TOOLS_NO_SHELL if args.no_shell else EVAL_TOOLS
 	model = "canonical" if args.canonical else default_model()

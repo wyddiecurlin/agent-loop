@@ -102,7 +102,7 @@ class AgentRun:
 	reporting it as "steps" reads as four times more work than actually happened.
 	"""
 	messages: list[InputItem]
-	stop_reason: Literal["done", "max_steps", "error"]
+	stop_reason: Literal["done", "max_steps", "error", "stalled"]
 	steps: int
 	error: str = ""  # set only when stop_reason == "error"
 
@@ -137,6 +137,15 @@ class AgentRun:
 			else:
 				seen.add(key)
 		return repeats
+
+
+
+MAX_STALLED_TURNS = 2
+STALL_NUDGE = (
+	"Your last response contained no tool call. Every turn must call exactly one tool. "
+	"Do not explain your reasoning first - call the tool now, and if the task is already "
+	"finished or cannot be done, call `done`."
+)
 
 
 SYSTEM_PROMPT = '''
@@ -180,6 +189,7 @@ def agent_loop(
 	messages: list[InputItem] = list(history) if history else [Message(role='system', content=system_prompt)]
 	messages.append(Message(role='user', content=prompt))
 
+	stalled = 0
 	for step in range(1, max_steps + 1):
 		trace(f"[LOG] step {step}/{max_steps} ({len(messages)} items in context)")
 		try:
@@ -195,6 +205,18 @@ def agent_loop(
 			log(f"[ERROR] generate failed at step {step}: {type(exc).__name__}: {exc}")
 			return AgentRun(messages, "error", step - 1, f"{type(exc).__name__}: {exc}")
 		trace(json.dumps(asdict(turn), indent=2))
+
+		# potentially stalled agent
+		if not turn.text and not turn.tool_calls:
+			stalled += 1
+			log(f"[LOG] stalled turn {stalled}/{MAX_STALLED_TURNS} (stop_reason={turn.stop_reason}, "
+			    f"{turn.usage.output_tokens if turn.usage else 0} output tokens)")
+			if stalled >= MAX_STALLED_TURNS:
+				return AgentRun(messages, "stalled", step,
+				                f"{stalled} consecutive turns produced no tool call")
+			messages.append(Message(role='user', content=STALL_NUDGE))
+			continue
+		stalled = 0
 
 		if turn.text:
 			messages.append(Message(role='assistant', content=turn.text))

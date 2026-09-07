@@ -96,7 +96,11 @@ TRACKER = CostTracker()
 
 DEFAULT_MODEL = "gpt-5.4-nano"  # fastest OpenAI TTFT (~0.67s) with reasoning off
 DEFAULT_REASONING_EFFORT = "none"  # no reasoning tokens before the first output token
-DEFAULT_TIMEOUT_S = 60.0
+# 600s, not 60. A task's slowest single request grows with how many agents share the GPU:
+# at 24 concurrent containers a request queues behind the others, and a timeout there is
+# not a saved second - it is a retry, which costs the GPU the whole generation twice and
+# re-rolls the sample, putting variance back into a run we are trying to make repeatable.
+DEFAULT_TIMEOUT_S = 600.0
 DEFAULT_MAX_RETRIES = 3
 
 # Provider selection: PROVIDER=openai (default) | qwen
@@ -104,6 +108,29 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_PROVIDER = "openai"
 QWEN_BASE_URL = "http://localhost:9000/v1"
 QWEN_MODEL = "qwen3.5-9b"
+
+# Repeatability comes from the SEED, not from temperature=0. That distinction is the
+# whole of this block.
+#
+# temperature=0 was tried and is a trap here. Greedy decoding walked this model into an
+# unbounded reasoning loop: 31,360 output tokens, all of them reasoning, no text and no
+# tool call, on task after task. Sampling normally breaks such a loop by taking a
+# different token; greedy cannot, because the argmax that started it is the same argmax
+# every time. So we sample, at the values the model card gives for precise coding, and
+# fix the seed - which makes the sampling reproducible without making it degenerate.
+#
+# Even so this is not bitwise reproducible: under continuous batching the kernel path
+# depends on what else is in the batch, so 24 concurrent agents still flip the occasional
+# token. Expect much less run-to-run noise, not none, and compare two runs paired.
+DEFAULT_TEMPERATURE = 0.6
+DEFAULT_TOP_P = 0.95
+DEFAULT_TOP_K = 20
+DEFAULT_SEED = 0
+
+# A turn that wants more than this has stopped doing the task. The runaway above cost
+# 31k tokens per step and would have repeated for every one of 60 steps; a cap turns an
+# unbounded loop into a bounded one that the loop's stall check can then end.
+DEFAULT_MAX_OUTPUT_TOKENS = 8192
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +288,9 @@ class QwenProvider:
 		base_url: str | None = None,
 		api_key: str | None = None,
 		thinking: bool | None = None,
+		temperature: float | None = None,
+		seed: int | None = None,
+		max_output_tokens: int | None = None,
 	):
 		self.client = client or OpenAI(
 			base_url=base_url or os.getenv("QWEN_BASE_URL", QWEN_BASE_URL),
@@ -269,6 +299,11 @@ class QwenProvider:
 			max_retries=0,
 		)
 		self.thinking = thinking if thinking is not None else os.getenv("QWEN_THINKING", "0") == "1"
+		self.temperature = temperature if temperature is not None else float(
+			os.getenv("QWEN_TEMPERATURE", DEFAULT_TEMPERATURE))
+		self.seed = seed if seed is not None else int(os.getenv("QWEN_SEED", DEFAULT_SEED))
+		self.max_output_tokens = max_output_tokens if max_output_tokens is not None else int(
+			os.getenv("QWEN_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS))
 
 	# -- Responses-style input -> Chat Completions messages --------------------
 
@@ -330,7 +365,14 @@ class QwenProvider:
 			"model": model,
 			"messages": self._to_chat_messages(messages),
 			"timeout": timeout,
-			"extra_body": {"chat_template_kwargs": {"enable_thinking": self.thinking}},
+			"temperature": self.temperature,
+			"top_p": DEFAULT_TOP_P,
+			"seed": self.seed,
+			"max_tokens": self.max_output_tokens,
+			"extra_body": {
+				"chat_template_kwargs": {"enable_thinking": self.thinking},
+				"top_k": DEFAULT_TOP_K,  # not an OpenAI parameter; vLLM takes it here
+			},
 		}
 		if tools:
 			kwargs["tools"] = self._to_chat_tools(tools)
@@ -414,6 +456,9 @@ def make_provider(name: str | None = None, timeout: float = DEFAULT_TIMEOUT_S) -
 	name = (name or os.getenv("PROVIDER", DEFAULT_PROVIDER)).lower()
 	if name == "qwen":
 		return QwenProvider(timeout=timeout)
+	# NOTE: OpenAIProvider deliberately sends neither. The Responses API reasoning models
+	# (gpt-5*) reject `temperature` outright, so there is no greedy setting to ask for -
+	# an OpenAI run cannot be made as repeatable as a self-hosted one.
 	if name == "openai":
 		if not os.getenv("OPENAI_API_KEY"):
 			raise RuntimeError("OPENAI_API_KEY is not set in the environment or .env")
