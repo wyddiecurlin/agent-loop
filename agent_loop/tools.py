@@ -16,11 +16,13 @@ import json
 import posixpath
 import re
 import time
+from datetime import date
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Callable, Iterable
 
 from .runtime import DockerRuntime
+from .web import Redirected, WebClient
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +382,46 @@ def shell_run(runtime: DockerRuntime, command: str, cwd: str | None = None, time
 
 
 # ---------------------------------------------------------------------------
+# Web
+#
+# Both take the WebClient as their first argument; build_registry binds it. The key it
+# holds is the agent's, not the model's (docs/WEB.md).
+# ---------------------------------------------------------------------------
+
+def web_search(web: WebClient, query: str, limit: int = 8, allowed_domains: list[str] | None = None) -> ToolResult:
+	hits = web.search(query, limit=limit, allowed_domains=allowed_domains)
+	if not hits:
+		return ToolResult(ok=True, output="no results", metadata={"hits": 0})
+	lines = []
+	for i, h in enumerate(hits, 1):
+		lines.append(f"{i}. {h.title}\n   {h.url}" + (f"  ({h.age})" if h.age else "")
+		             + (f"\n   {h.snippet}" if h.snippet else ""))
+	return ToolResult(ok=True, output="\n".join(lines), metadata={"hits": len(hits)})
+
+
+def web_fetch(web: WebClient, url: str, prompt: str | None = None) -> ToolResult:
+	page = web.fetch(url)
+	if isinstance(page, Redirected):
+		return ToolResult(
+			ok=True,
+			output=f"redirect: {page.location}\n{page.url} redirects to another host. "
+			       "Call web_fetch with that URL if it is where you meant to go.",
+			metadata={"url": page.url, "redirect": page.location},
+		)
+	if not page.markdown:
+		raise ValueError(f"{page.url} has no readable text (a JavaScript-only page, or a login wall)")
+	meta = {"url": page.url, "chars": len(page.markdown)}
+	if not prompt:
+		return ToolResult(ok=True, output=page.markdown, metadata=meta)
+	answer = web.extract(page.markdown, prompt)
+	return ToolResult(
+		ok=True,
+		output=f"{answer}\n\nsource: {page.url} ({len(page.markdown)} chars; fetch without `prompt` to read it all)",
+		metadata={**meta, "extracted": True},
+	)
+
+
+# ---------------------------------------------------------------------------
 # Task completion
 # ---------------------------------------------------------------------------
 
@@ -402,11 +444,15 @@ def done(answer: str) -> ToolResult:
 # Registry
 # ---------------------------------------------------------------------------
 
-def build_registry(runtime: DockerRuntime, allow: Iterable[str] | None = None) -> ToolRegistry:
+def build_registry(runtime: DockerRuntime, allow: Iterable[str] | None = None,
+                   web: WebClient | None = None) -> ToolRegistry:
 	"""Every tool that touches the world is bound to `runtime` here.
 
 	This is the enforcement point. There is no module-level registry, so no caller can
 	obtain a filesystem tool without first deciding which runtime it acts on.
+
+	`web` is the WebClient behind web_search / web_fetch; the default one reads its key from
+	the environment. Tests pass one whose transport replays fixtures.
 
 	`allow` narrows the set: with it, the model is handed only those tools plus `done`,
 	which is never removable because it is the loop's only exit. A caller that wants the
@@ -414,6 +460,8 @@ def build_registry(runtime: DockerRuntime, allow: Iterable[str] | None = None) -
 	model ever sees - not refused at call time, which would still leave it discoverable.
 	"""
 	bind = lambda fn: partial(fn, runtime)  # noqa: E731
+	web = web or WebClient()
+	today = f"{date.today():%B %Y}"
 
 	tools = [
 		Tool(
@@ -572,6 +620,45 @@ def build_registry(runtime: DockerRuntime, allow: Iterable[str] | None = None) -
 				"required": ["command"],
 			},
 			execute=bind(shell_run),
+		),
+		Tool(
+			name="web_search",
+			description=(
+				"Search the web and return ranked results: title, URL, age, and a snippet. Use it "
+				"when you do not have a URL yet, then web_fetch the promising result. It is "
+				f"{today}: put the year in queries about anything recent. Set allowed_domains "
+				"to prefer official documentation when it exists."
+			),
+			input_schema={
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "The search query. Supports site:, \"exact phrase\", and -term."},
+					"limit": {"type": "integer", "description": "Results to return, 1-20. Defaults to 8."},
+					"allowed_domains": {"type": "array", "items": {"type": "string"}, "description": "Only return results from these domains, e.g. [\"docs.python.org\"]."},
+				},
+				"required": ["query"],
+			},
+			execute=partial(web_search, web),
+		),
+		Tool(
+			name="web_fetch",
+			description=(
+				"Fetch a URL and return its content as markdown. Give `prompt` whenever you know what "
+				"you are looking for: a second model reads the whole page and returns only the answer, "
+				"which is far cheaper than reading the page yourself. Without `prompt` the page is "
+				f"returned as-is, truncated at {MAX_OUTPUT_CHARS} chars. http is upgraded to https; a "
+				"redirect to another host is returned rather than followed; private addresses, "
+				"non-text content, and pages over 10MB are refused. Cite the URLs you relied on in `done`."
+			),
+			input_schema={
+				"type": "object",
+				"properties": {
+					"url": {"type": "string", "description": "The http(s) URL to fetch."},
+					"prompt": {"type": "string", "description": "What to find in the page, e.g. 'how are graph breaks handled? quote the relevant section'."},
+				},
+				"required": ["url"],
+			},
+			execute=partial(web_fetch, web),
 		),
 	]
 
