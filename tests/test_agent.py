@@ -6,7 +6,7 @@
 import re
 from datetime import datetime
 
-from agent_loop.loop import agent_loop, final_text
+from agent_loop.loop import agent_loop
 from agent_loop.runtime import DockerRuntime
 from agent_loop.providers import TRACKER
 
@@ -54,8 +54,7 @@ def check(label: str, passed: bool, detail: str = "") -> bool:
 
 def run_case(n: int, runtime: DockerRuntime, prompt: str) -> str:
 	print(f"\n{'=' * 70}\nTest case {n}: {prompt}\n{'=' * 70}")
-	messages = agent_loop(prompt=prompt, runtime=runtime)
-	return final_text(messages)
+	return agent_loop(prompt=prompt, runtime=runtime).answer
 
 
 def run_suite(runtime: DockerRuntime) -> None:

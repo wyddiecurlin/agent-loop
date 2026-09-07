@@ -12,6 +12,7 @@ dominates the wall clock by an order of magnitude.
 """
 
 import argparse
+import collections
 import json
 import secrets
 import sys
@@ -33,6 +34,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 	p.add_argument("--dataset", choices=sorted(DATASETS), default="humaneval")
 	p.add_argument("--limit", type=int, default=20, help="how many tasks to run (0 = all)")
 	p.add_argument("--offset", type=int, default=0, help="skip this many tasks first")
+	p.add_argument("--ids", default="",
+	               help="comma-separated task ids to run, e.g. 'mbpp/136,mbpp/180'. Overrides "
+	                    "--offset/--limit. To re-run a run's failures:  --ids \"$(python3 -c "
+	                    "'import json,sys; print(\",\".join(r[\"task_id\"] for r in "
+	                    "json.load(open(sys.argv[1]))[\"results\"] if not r[\"passed\"]))' FILE)\"")
 	p.add_argument("--max-steps", type=int, default=MAX_STEPS)
 	p.add_argument("--no-shell", action="store_true",
 	               help="withhold shell_run: scores one-shot writing with no chance to run the code")
@@ -52,9 +58,18 @@ def main(argv: list[str] | None = None) -> int:
 		return tokens.setdefault(task_id, f"__EVAL_OK_{secrets.token_hex(8)}__")
 
 	tasks = load(args.dataset, token_for)
-	tasks = tasks[args.offset:]
-	if args.limit:
-		tasks = tasks[: args.limit]
+	if args.ids:
+		wanted = [i.strip() for i in args.ids.split(",") if i.strip()]
+		by_id = {t.task_id: t for t in tasks}
+		missing = [i for i in wanted if i not in by_id]
+		if missing:
+			raise SystemExit(f"no such task id(s) in {args.dataset}: {missing}")
+		# Caller order, so re-running a failure list reads the same way it was reported.
+		tasks = [by_id[i] for i in wanted]
+	else:
+		tasks = tasks[args.offset:]
+		if args.limit:
+			tasks = tasks[: args.limit]
 
 	tools = EVAL_TOOLS_NO_SHELL if args.no_shell else EVAL_TOOLS
 	model = "canonical" if args.canonical else default_model()
@@ -70,12 +85,20 @@ def main(argv: list[str] | None = None) -> int:
 			results.append(r)
 			passed = sum(x.passed for x in results)
 			log(f"[{'PASS' if r.passed else 'FAIL'}] {r.task_id}  ({i}/{len(tasks)}, "
-			    f"running {passed}/{i} = {passed / i:.1%})" + (f"  -- {r.reason}" if r.reason else ""))
+			    f"running {passed}/{i} = {passed / i:.1%})  "
+			    f"[{r.stop_reason}, {r.steps} turns, {r.repeated_calls} repeats]"
+			    + (f"  -- {r.reason}" if r.reason else ""))
 	finally:
 		runtime.teardown()
 
 	passed = sum(r.passed for r in results)
 	total = len(results)
+	# Aggregates that say where a lost point went. `stop_reason` separates a wrong answer
+	# from a run that never got to give one; `tools` shows what the turns were spent on.
+	stops = collections.Counter(r.stop_reason for r in results)
+	tool_totals = collections.Counter()
+	for r in results:
+		tool_totals.update(r.tools_used)
 	summary = {
 		"dataset": args.dataset,
 		"model": model,
@@ -86,6 +109,10 @@ def main(argv: list[str] | None = None) -> int:
 		# human-eval repo only matters when sampling several completions per task.
 		"pass@1": round(passed / total, 4) if total else 0.0,
 		"duration_s": round(time.perf_counter() - started, 1),
+		"stop_reasons": dict(stops.most_common()),
+		"tool_calls": dict(tool_totals.most_common()),
+		"turns_mean": round(sum(r.steps for r in results) / total, 1) if total else 0,
+		"repeated_calls_total": sum(r.repeated_calls for r in results),
 		"usage": asdict(TRACKER.total),
 		"results": [asdict(r) for r in results],
 	}
@@ -93,6 +120,9 @@ def main(argv: list[str] | None = None) -> int:
 	print()
 	log(f"\n==> {args.dataset} pass@1 = {passed}/{total} = {summary['pass@1']:.1%}   "
 	    f"({summary['duration_s']}s, ${TRACKER.total.cost_usd:.4f})")
+	log(f"    stop_reasons={summary['stop_reasons']}  turns_mean={summary['turns_mean']}  "
+	    f"repeats={summary['repeated_calls_total']}")
+	log(f"    tool_calls={summary['tool_calls']}")
 	return 0 if total else 1
 
 

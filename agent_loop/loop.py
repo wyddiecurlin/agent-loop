@@ -8,7 +8,8 @@ All narration goes to stderr. stdout belongs to the result JSON (see __main__.py
 
 import json
 import sys
-from dataclasses import asdict
+from collections import Counter
+from dataclasses import asdict, dataclass
 from typing import Iterable, Literal
 
 from .providers import (
@@ -88,6 +89,56 @@ def stream_tool_calls(t: str, kind: Literal["function_call", "function_args"]) -
 		print(t, end="", flush=True, file=sys.stderr)
 
 
+@dataclass
+class AgentRun:
+	"""What one agent_loop call did, as a struct rather than a bare message list.
+
+	The list alone could not answer "why did this stop". A run that exhausted its budget
+	and one that called `done` with an empty answer both ended with no answer, and a run
+	whose provider raised did not come back at all - so a caller measuring failures could
+	not tell a scaffold problem from a wrong answer. `stop_reason` is that distinction.
+
+	`steps` counts model turns. len(messages) grows about three items per turn, so
+	reporting it as "steps" reads as four times more work than actually happened.
+	"""
+	messages: list[InputItem]
+	stop_reason: Literal["done", "max_steps", "error"]
+	steps: int
+	error: str = ""  # set only when stop_reason == "error"
+
+	@property
+	def ok(self) -> bool:
+		return self.stop_reason == "done"
+
+	@property
+	def answer(self) -> str:
+		return final_text(self.messages)
+
+	def tool_histogram(self) -> dict[str, int]:
+		"""How many times each tool was called, most used first."""
+		names = Counter(m["name"] for m in self.messages if m.get("type") == "function_call")
+		return dict(names.most_common())
+
+	def repeated_calls(self) -> int:
+		"""Calls that repeat an earlier (name, arguments) pair exactly.
+
+		A loop that is stuck usually is not varying its input. This separates "the task
+		needed 30 turns" from "the model asked the same thing 30 times", which need
+		opposite fixes: a bigger budget, or an escape from the rut.
+		"""
+		seen: set[tuple[str, str]] = set()
+		repeats = 0
+		for m in self.messages:
+			if m.get("type") != "function_call":
+				continue
+			key = (m["name"], m["arguments"])
+			if key in seen:
+				repeats += 1
+			else:
+				seen.add(key)
+		return repeats
+
+
 SYSTEM_PROMPT = '''
 	You are an agent that completes tasks by invoking tools according to user's requests.
 	RULES:
@@ -98,8 +149,8 @@ SYSTEM_PROMPT = '''
 	  - it worked: `answer` is the complete reply for the user.
 	  - it cannot be done: call `done` anyway and use `answer` to say what you tried and
 	    why it failed. Never keep calling tools hoping the problem fixes itself.
-	- `answer` must stand on its own: give the actual values, file names, and command output
-	  you found rather than referring back to earlier steps.
+	- `answer` must stand on its own: if the task requires modifying outside state or files,
+		state what you have done. Otherwise, state the answer concisely. 
 '''
 
 
@@ -109,15 +160,11 @@ def agent_loop(
 	max_steps: int = 120,
 	tools: Iterable[str] | None = None,
 	system_prompt: str = SYSTEM_PROMPT,
-) -> list:
+) -> AgentRun:
 	"""Run tools until the model calls `done`.
 
-	tool_choice="required" makes every turn carry at least one tool call, so `done` is the
-	only exit and the loop never has to guess whether a plain-text reply meant "finished".
-
-	Every tool the model can reach is bound to `runtime`, so the loop cannot act outside
-	the sandbox it was handed - there is no other registry to reach for. `tools` narrows
-	that set further; see build_registry.
+	To work for smaller self-hosted models, we set tool_choice="required" to make every turn 
+	carry at least one tool call, so `done` is the only exit. 
 	"""
 	registry = build_registry(runtime, allow=tools)
 	messages: list[InputItem] = [
@@ -125,16 +172,20 @@ def agent_loop(
 		Message(role='user', content=prompt),
 	]
 
-	for _ in range(max_steps):
-		log(f"[LOG] step {len(messages)} items in context")
-		turn = generate(
-			messages=messages,
-			tools=registry.schema(),
-			tool_choice="required",
-			stream=True,
-			on_text=stream,
-			on_tool_call=stream_tool_calls,
-		)
+	for step in range(1, max_steps + 1):
+		log(f"[LOG] step {step}/{max_steps} ({len(messages)} items in context)")
+		try:
+			turn = generate(
+				messages=messages,
+				tools=registry.schema(),
+				tool_choice="required",
+				stream=True,
+				on_text=stream,
+				on_tool_call=stream_tool_calls,
+			)
+		except Exception as exc:  # noqa: BLE001
+			log(f"[ERROR] generate failed at step {step}: {type(exc).__name__}: {exc}")
+			return AgentRun(messages, "error", step - 1, f"{type(exc).__name__}: {exc}")
 		log(json.dumps(asdict(turn), indent=2))
 
 		if turn.text:
@@ -150,7 +201,7 @@ def agent_loop(
 		answer = None
 		for call in turn.tool_calls or []:
 			result: ToolResult = registry.execute(call)
-			log(f"[LOG]   {result.output[:300]}")
+			log(f"[LOG] {result.output[:300]}")
 			messages.append(FunctionCallOutputItem(
 				type='function_call_output',
 				call_id=str(call.id),
@@ -163,10 +214,10 @@ def agent_loop(
 				answer = result.output
 		if answer is not None:
 			messages.append(Message(role='assistant', content=answer))
-			return messages
+			return AgentRun(messages, "done", step)
 
 	log(f"[LOG] hit max_steps {max_steps}")
-	return messages
+	return AgentRun(messages, "max_steps", max_steps)
 
 
 def final_text(messages: list[InputItem] | None) -> str:

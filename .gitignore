@@ -35,3 +35,5 @@ sandbox/
 # (evals/results/humaneval.json, mbpp.json) are kept as the record of a scored run.
 evals/results/*_shard*.json
 evals/results/*_shard*.err
+evals/results/thrash*.json
+evals/results/thrash*.err

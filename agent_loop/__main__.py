@@ -20,7 +20,7 @@ from dataclasses import asdict
 
 from dotenv import load_dotenv
 
-from .loop import agent_loop, final_text, log
+from .loop import AgentRun, agent_loop, log
 from .runtime import DockerRuntime
 from .providers import TRACKER
 
@@ -36,26 +36,25 @@ def main(argv: list[str] | None = None) -> int:
 	load_dotenv()
 	runtime = DockerRuntime()
 	runtime.setup()
-	messages: list = []
+	run = AgentRun([], "error", 0, "did not start")
 	try:
-		messages = agent_loop(prompt=" ".join(argv), runtime=runtime)
-		answer = final_text(messages)
-		ok = bool(answer)
+		run = agent_loop(prompt=" ".join(argv), runtime=runtime)
 	except Exception as exc:  # noqa: BLE001 - a crash is still a result to report
 		log(f"[ERROR] {type(exc).__name__}: {exc}")
-		answer, ok = f"{type(exc).__name__}: {exc}", False
+		run = AgentRun([], "error", 0, f"{type(exc).__name__}: {exc}")
 	finally:
 		runtime.teardown()
 
 	json.dump({
-		"ok": ok,
-		"answer": answer,
-		"steps": len(messages),
+		"ok": run.ok,
+		"answer": run.answer or run.error,
+		"stop_reason": run.stop_reason,
+		"steps": run.steps,
 		"usage": asdict(TRACKER.total),
 		"calls": TRACKER.calls,
 	}, sys.stdout, indent=2)
 	print()
-	return 0 if ok else 1
+	return 0 if run.ok else 1
 
 
 if __name__ == "__main__":

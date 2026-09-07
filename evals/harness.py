@@ -24,7 +24,7 @@ is enough to move a number.
 import time
 from dataclasses import dataclass, field
 
-from agent_loop.loop import agent_loop, final_text, log
+from agent_loop.loop import agent_loop, log
 from agent_loop.providers import TRACKER, Usage
 from agent_loop.runtime import DockerRuntime
 
@@ -51,7 +51,7 @@ EVAL_TOOLS_NO_SHELL = ["fs_read", "fs_write", "fs_list"]
 
 # Enough to write a file, run it, read the error, and fix it a few times. High enough not
 # to bind on a real attempt, low enough that a loop that has lost the plot stops.
-MAX_STEPS = 30
+MAX_STEPS = 60
 
 
 @dataclass
@@ -59,10 +59,18 @@ class Result:
 	task_id: str
 	passed: bool
 	reason: str  # "" when passed; otherwise why it did not
-	steps: int
+	steps: int  # model turns, not message-list length
 	duration_s: float
 	usage: Usage = field(default_factory=Usage)
 	answer: str = ""  # recorded for debugging; never consulted for scoring
+	# Why the loop stopped, independent of whether the answer was right. A task can fail
+	# the grader having finished cleanly (wrong code) or pass it having run out of budget
+	# (the file was already correct), so this cannot be inferred from `passed`.
+	stop_reason: str = "done"
+	# What the model actually did with its turns. A budget that binds and a model that is
+	# stuck look identical in the score and completely different here.
+	tools_used: dict[str, int] = field(default_factory=dict)
+	repeated_calls: int = 0
 
 
 def grade(runtime: DockerRuntime, task: Task, token: str) -> tuple[bool, str]:
@@ -120,19 +128,22 @@ def run_task(
 	if task.seed:
 		runtime.put(task.seed)
 
-	steps, answer = 0, ""
+	steps, answer, stop_reason, hist, repeats = 0, "", "canonical", {}, 0
 	if canonical:
 		runtime.write(SOLUTION, task.canonical)
 	else:
-		try:
-			messages = agent_loop(task.instruction, runtime, max_steps=max_steps, tools=tools)
-			steps, answer = len(messages), final_text(messages)
-		except Exception as exc:  # noqa: BLE001 - a crashed task is a failed task, not a dead run
-			log(f"[ERROR] {task.task_id}: {type(exc).__name__}: {exc}")
-			return Result(task.task_id, False, f"agent raised {type(exc).__name__}: {exc}",
-			              steps, time.perf_counter() - started)
+		run = agent_loop(task.instruction, runtime, max_steps=max_steps, tools=tools)
+		steps, answer, stop_reason = run.steps, run.answer, run.stop_reason
+		hist, repeats = run.tool_histogram(), run.repeated_calls()
 
 	passed, reason = grade(runtime, task, token)
+	# The grader only ever sees the workspace, so on its own it reports "no solution.py"
+	# for a provider that died at step 1 and for a model that simply never wrote one.
+	# Keep both facts.
+	if not passed and stop_reason == "error":
+		reason = f"agent error ({run.error}); {reason}"
+	elif not passed and stop_reason == "max_steps":
+		reason = f"hit max_steps={max_steps}; {reason}"
 	usage = Usage(
 		input_tokens=TRACKER.total.input_tokens - before.input_tokens,
 		cached_input_tokens=TRACKER.total.cached_input_tokens - before.cached_input_tokens,
@@ -140,4 +151,5 @@ def run_task(
 		reasoning_tokens=TRACKER.total.reasoning_tokens - before.reasoning_tokens,
 		cost_usd=TRACKER.total.cost_usd - before.cost_usd,
 	)
-	return Result(task.task_id, passed, reason, steps, time.perf_counter() - started, usage, answer)
+	return Result(task.task_id, passed, reason, steps, time.perf_counter() - started,
+	              usage, answer, stop_reason, hist, repeats)
