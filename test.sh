@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Every suite runs where the agent runs: inside the container, launched by ./run.sh.
 #
-#   ./test.sh            lint, then sandbox, then evals, then agent
+#   ./test.sh            lint, then sandbox, then providers, then evals, then agent
 #   ./test.sh sandbox    runtime conformance + escape, no model
+#   ./test.sh providers  the model catalog and the request it builds, no model
+#                        add --live to ask each platform whether the ids still exist
 #   ./test.sh evals      the benchmark score cannot be forged, no model
 #   ./test.sh agent      the 8 end-to-end cases
 #   ./test.sh lint       the boundary is structural (a host-side grep)
@@ -13,7 +15,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 suite=all
-for a in "$@"; do case $a in lint | sandbox | evals | agent) suite=$a ;; esac; done
+for a in "$@"; do case $a in lint | sandbox | providers | evals | agent) suite=$a ;; esac; done
+live=""
+for a in "$@"; do [ "$a" = --live ] && live=--live; done
 want() { [ "$suite" = all ] || [ "$suite" = "$1" ]; }
 
 if want lint; then
@@ -33,6 +37,11 @@ fi
 if want sandbox; then
 	echo "==> sandbox: runtime conformance + escape, inside the container"
 	AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_sandbox
+fi
+
+if want providers; then
+	echo "==> providers: the catalog and the request it builds, inside the container"
+	AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_providers $live
 fi
 
 if want evals; then

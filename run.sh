@@ -4,6 +4,9 @@
 #   ./run.sh "fix the failing test in src/parser.py"    one task, JSON result on stdout
 #   ./run.sh                                             no task: interactive chat
 #
+# Provider and model are a prefix, never an edit:
+#   PROVIDER=fireworks MODEL=kimi-k3 ./run.sh "..."
+#
 # The agent process is never outside. It cannot create the box it stands in, so this
 # script does -- and everything else, including the test suites, comes through here.
 set -euo pipefail
@@ -27,7 +30,8 @@ if [ -t 0 ] && [ -t 1 ]; then opts+=(--tty --interactive); fi
 if [ -f .env ]; then opts+=(--env-file .env); fi
 # Anything set in the caller's shell wins over .env, so a provider A/B is a prefix on the
 # command rather than an edit to a secrets file:  PROVIDER=qwen ./evals.sh --dataset ...
-for v in PROVIDER OPENAI_MODEL QWEN_MODEL QWEN_BASE_URL QWEN_THINKING QWEN_TEMPERATURE QWEN_SEED; do
+for v in PROVIDER MODEL REASONING_EFFORT MAX_OUTPUT_TOKENS \
+	OPENAI_MODEL QWEN_MODEL QWEN_BASE_URL QWEN_THINKING QWEN_TEMPERATURE QWEN_SEED; do
 	if [ -n "${!v:-}" ]; then opts+=(-e "$v=${!v}"); fi
 done
 if [ -n "${AGENT_ENTRYPOINT:-}" ]; then opts+=(--entrypoint "$AGENT_ENTRYPOINT"); fi
