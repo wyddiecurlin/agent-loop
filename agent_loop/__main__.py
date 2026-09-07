@@ -1,6 +1,7 @@
 """Entry point: argv -> runtime -> agent_loop -> one JSON object on stdout.
 
 	python -m agent_loop "list the files in ."
+	python -m agent_loop                        # no task: interactive, one turn per line
 
 The contract is the Unix one, because it composes with any orchestrator without
 inventing a protocol, and because nobody outside the container holds a Python
@@ -27,15 +28,34 @@ from .providers import TRACKER
 USAGE = 'usage: python -m agent_loop "<task>"   (launch it with ./run.sh; ./test.sh runs the suites)'
 
 
+def chat(runtime: DockerRuntime) -> int:
+	"""Interactive mode: each line is a task, and the conversation carries over between them."""
+	print("agent-loop interactive. Ctrl-D or 'exit' to quit.", file=sys.stderr)
+	history = None
+	while True:
+		try:
+			prompt = input("\nyou> ").strip()
+		except EOFError:
+			return 0
+		if prompt in ("exit", "quit"):
+			return 0
+		if not prompt:
+			continue
+		run = agent_loop(prompt=prompt, runtime=runtime, history=history, verbose=False)
+		history = run.messages
+		print(f"\nagent> {run.answer or run.error or f'stopped: {run.stop_reason}'}", flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
 	argv = sys.argv[1:] if argv is None else argv
-	if not argv:
-		print(USAGE, file=sys.stderr)
-		return 2
-
 	load_dotenv()
 	runtime = DockerRuntime()
 	runtime.setup()
+	if not argv:
+		if not sys.stdin.isatty():
+			print(USAGE, file=sys.stderr)
+			return 2
+		return chat(runtime)
 	run = AgentRun([], "error", 0, "did not start")
 	try:
 		run = agent_loop(prompt=" ".join(argv), runtime=runtime)

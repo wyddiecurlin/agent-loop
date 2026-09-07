@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The launcher: the one place a container is created, and the only way the agent runs.
 #
-#   ./run.sh "fix the failing test in src/parser.py"
+#   ./run.sh "fix the failing test in src/parser.py"    one task, JSON result on stdout
+#   ./run.sh                                             no task: interactive chat
 #
 # The agent process is never outside. It cannot create the box it stands in, so this
 # script does -- and everything else, including the test suites, comes through here.

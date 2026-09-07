@@ -160,20 +160,28 @@ def agent_loop(
 	max_steps: int = 120,
 	tools: Iterable[str] | None = None,
 	system_prompt: str = SYSTEM_PROMPT,
+	history: list[InputItem] | None = None,
+	verbose: bool = True,
 ) -> AgentRun:
 	"""Run tools until the model calls `done`.
 
 	To work for smaller self-hosted models, we set tool_choice="required" to make every turn 
 	carry at least one tool call, so `done` is the only exit. 
+
+	`history` is a previous run's `messages`: pass it to continue that conversation with a
+	new user prompt instead of starting from the system prompt.
+
+	`verbose=False` keeps only the tool names on stderr: no step counter, no streamed
+	arguments, no turn dump, no tool output. For talking to it, not for debugging it.
 	"""
+	trace = log if verbose else (lambda *_: None)
+	on_tool_call = stream_tool_calls if verbose else (lambda t, kind: kind == "function_call" and log(f"  [{t}]"))
 	registry = build_registry(runtime, allow=tools)
-	messages: list[InputItem] = [
-		Message(role='system', content=system_prompt),
-		Message(role='user', content=prompt),
-	]
+	messages: list[InputItem] = list(history) if history else [Message(role='system', content=system_prompt)]
+	messages.append(Message(role='user', content=prompt))
 
 	for step in range(1, max_steps + 1):
-		log(f"[LOG] step {step}/{max_steps} ({len(messages)} items in context)")
+		trace(f"[LOG] step {step}/{max_steps} ({len(messages)} items in context)")
 		try:
 			turn = generate(
 				messages=messages,
@@ -181,12 +189,12 @@ def agent_loop(
 				tool_choice="required",
 				stream=True,
 				on_text=stream,
-				on_tool_call=stream_tool_calls,
+				on_tool_call=on_tool_call,
 			)
 		except Exception as exc:  # noqa: BLE001
 			log(f"[ERROR] generate failed at step {step}: {type(exc).__name__}: {exc}")
 			return AgentRun(messages, "error", step - 1, f"{type(exc).__name__}: {exc}")
-		log(json.dumps(asdict(turn), indent=2))
+		trace(json.dumps(asdict(turn), indent=2))
 
 		if turn.text:
 			messages.append(Message(role='assistant', content=turn.text))
@@ -201,7 +209,7 @@ def agent_loop(
 		answer = None
 		for call in turn.tool_calls or []:
 			result: ToolResult = registry.execute(call)
-			log(f"[LOG] {result.output[:300]}")
+			trace(f"[LOG] {result.output[:300]}")
 			messages.append(FunctionCallOutputItem(
 				type='function_call_output',
 				call_id=str(call.id),
