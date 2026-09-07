@@ -39,7 +39,7 @@ from .tools import ToolCall
 # Defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL = "gpt-5.4-nano"  # fastest OpenAI TTFT (~0.67s) with reasoning off
+DEFAULT_MODEL = "gpt-5.4-nano"  # the openai backend's pick: fastest TTFT (~0.67s), reasoning off
 DEFAULT_REASONING_EFFORT = "none"  # no reasoning tokens before the first output token
 # 600s, not 60. A task's slowest single request grows with how many agents share the GPU:
 # at 24 concurrent containers a request queues behind the others, and a timeout there is
@@ -48,8 +48,12 @@ DEFAULT_REASONING_EFFORT = "none"  # no reasoning tokens before the first output
 DEFAULT_TIMEOUT_S = 600.0
 DEFAULT_MAX_RETRIES = 3
 
-# Provider selection: PROVIDER=openai (default) | fireworks | together | qwen
-DEFAULT_PROVIDER = "openai"
+# Provider selection: PROVIDER=fireworks (default) | together | openai | qwen
+# Fireworks is the default because it is the only one of the two hosted platforms that
+# serves all six models, and the cheapest on the two flagships once prompt caching is
+# counted - which on an agent loop is most of the bill. docs/PROVIDERS.md has the
+# comparison. `openai` and `qwen` ignore MODEL and read OPENAI_MODEL / QWEN_MODEL.
+DEFAULT_PROVIDER = "fireworks"
 QWEN_BASE_URL = "http://localhost:9000/v1"
 QWEN_MODEL = "qwen3.5-9b"
 
@@ -175,8 +179,11 @@ def resolve_model(name: str, provider: str) -> str:
 	if entry is not None:
 		return entry.id
 	if name in {alias for models in CATALOG.values() for alias in models}:
-		known = ", ".join(sorted(CATALOG.get(provider, {})))
-		raise ValueError(f"{provider!r} does not serve {name!r}; it has: {known}")
+		# .env pins MODEL, so the likely cause is overriding PROVIDER without it. Say so:
+		# the alternative is a stack trace that names neither variable.
+		known = ", ".join(sorted(CATALOG.get(provider, {}))) or "no models in the catalog"
+		raise ValueError(
+			f"{provider!r} does not serve {name!r}. Set MODEL= to clear it, or to one of: {known}")
 	return name
 
 
@@ -449,6 +456,33 @@ BACKENDS: dict[str, Backend] = {
 }
 
 
+# Fireworks reports prompt-cache hits ONLY in this response header. Its body's
+# `prompt_tokens_details.cached_tokens` is present and always 0, which is the worst shape
+# a discrepancy can take: it looks like an answer. Reading the body alone billed every
+# Fireworks token at the uncached rate - measured at 24k tokens of shared prefix, DeepSeek
+# V4 Pro reports 24012 of 24013 cached, so the over-charge on a long agent run is not a
+# rounding error, it is most of the invoice.
+#
+# Caching is on by default and needs no key; it simply does not engage on short prefixes,
+# and where it kicks in is per-model. Measured against the live API: glm-5.3-flash caches
+# in exact 2048-token blocks, so anything under 2048 caches nothing at all, while
+# deepseek-v4-pro hits ~100% from 1800 tokens up. This repo's prompts are ~1400-1800
+# tokens, so a 0% hit rate on the default model is the design, not a broken header.
+CACHED_TOKENS_HEADER = "fireworks-cached-prompt-tokens"
+
+
+def cached_header(headers) -> int | None:
+	"""Cached prompt tokens per the response headers, or None if this platform says
+	nothing there and the body should be believed instead."""
+	value = headers.get(CACHED_TOKENS_HEADER)
+	if value is None:
+		return None
+	try:
+		return int(value)
+	except (TypeError, ValueError):
+		return None
+
+
 class ChatProvider:
 	"""Any OpenAI-compatible Chat Completions endpoint, hosted or self-hosted.
 
@@ -593,23 +627,25 @@ class ChatProvider:
 			kwargs["tool_choice"] = tool_choice or "auto"
 
 		if not stream:
-			resp = self.client.chat.completions.create(**kwargs)
+			raw = self.client.chat.completions.with_raw_response.create(**kwargs)
+			resp = raw.parse()
 			choice = resp.choices[0]
 			text = choice.message.content or None
 			calls = [
 				ToolCall(id=tc.id, name=tc.function.name, arguments=tc.function.arguments or "{}")
 				for tc in (choice.message.tool_calls or [])
 			]
-			return self._to_turn(text, calls, resp.usage, choice.finish_reason, model)
+			return self._to_turn(text, calls, resp.usage, choice.finish_reason, model,
+			                     cached_header(raw.headers))
 
 		# Streaming: accumulate text + tool-call fragments keyed by index.
 		text_parts: list[str] = []
 		pending: dict[int, dict] = {}
 		usage = None
 		finish = None
-		for chunk in self.client.chat.completions.create(
-			stream=True, stream_options={"include_usage": True}, **kwargs
-		):
+		raw = self.client.chat.completions.with_raw_response.create(
+			stream=True, stream_options={"include_usage": True}, **kwargs)
+		for chunk in raw.parse():
 			if chunk.usage:
 				usage = chunk.usage
 			if not chunk.choices:
@@ -643,14 +679,18 @@ class ChatProvider:
 			)
 			for i, slot in sorted(pending.items())
 		]
-		return self._to_turn("".join(text_parts) or None, calls, usage, finish, model)
+		return self._to_turn("".join(text_parts) or None, calls, usage, finish, model,
+		                     cached_header(raw.headers))
 
-	def _to_turn(self, text, calls, raw_usage, finish_reason, model: str) -> ModelTurn:
+	def _to_turn(self, text, calls, raw_usage, finish_reason, model: str,
+	             cached_from_header: int | None = None) -> ModelTurn:
 		usage = None
 		if raw_usage is not None:
 			in_details = getattr(raw_usage, "prompt_tokens_details", None)
 			out_details = getattr(raw_usage, "completion_tokens_details", None)
 			cached = getattr(in_details, "cached_tokens", 0) or 0
+			if cached_from_header is not None:
+				cached = cached_from_header
 			reasoning = getattr(out_details, "reasoning_tokens", 0) or 0
 			usage = Usage(
 				input_tokens=raw_usage.prompt_tokens,
@@ -785,7 +825,9 @@ def make_provider(name: str | None = None, timeout: float = DEFAULT_TIMEOUT_S) -
 
 
 # The model each platform gets when the caller names none. Not the best model on the
-# platform - the one whose price makes a 164-task eval a rounding error.
+# platform - the one whose price makes a 164-task eval a rounding error. On the hosted
+# two that is glm-5.3-flash at $0.15/$0.03/$0.50, which put up 8/8 on humaneval for
+# $0.006; kimi-k3 is the most capable of the six and twenty times the price.
 DEFAULT_MODELS: dict[str, str] = {
 	"openai": DEFAULT_MODEL,
 	"qwen": QWEN_MODEL,

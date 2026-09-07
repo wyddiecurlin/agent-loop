@@ -41,29 +41,58 @@ third-party platform without a version bump. Qwen 3.8 Max did ship open weights
 
 ## Price: on the workload this repo actually runs
 
-Not list price — the bill for **one real HumanEval run**, using the token counts from
-`evals/results/humaneval.json`: 1,906,965 input tokens of which **1,646,304 (86.3%) were
-cache hits**, and 116,848 output tokens.
+Not list price. The profile below is **measured**, from a real `--dataset humaneval`
+run on `fireworks/glm-5.3-flash` (turns_mean 3.0), scaled to the full 164 tasks:
+**674,696 input tokens and 45,510 output**.
 
-| model | Fireworks | Together |
+Cost is given as a range, because prompt caching is the single biggest lever and
+whether it engages **depends on the model, not on the platform** (see below).
+
+| model | Fireworks, no cache | Fireworks, cached | Together, no cache | Together, cached |
+|---|---|---|---|---|
+| glm-5.3-flash | **$0.124** | $0.043 | $0.124 | $0.043 |
+| deepseek-v4-flash | $0.178 | $0.035 | **$0.107** | $0.033 |
+| qwen-3.7-plus | $0.343 | **$0.127** | $0.274 | $0.274 |
+| deepseek-v4-pro | $1.071 | **$0.210** | $1.071 | $0.268 |
+| glm-5.3 | $1.145 | $0.376 | $1.145 | $0.376 |
+| qwen-3.8-max | $1.622 | $0.442 | $1.622 | $0.442 |
+| kimi-k3 | $2.707 | $0.885 | $2.707 | $0.885 |
+
+`glm-5.3-flash` is the default at a measured **$0.0045 for 6 tasks, 6/6 passing** — the
+left column, because its cache never engages here, and it is still the cheapest thing
+in the table. Cheap uncached input beats expensive cached input once output price
+dominates, which at three turns per task it does.
+
+### Prompt caching is not uniform, and Fireworks does not report it in the body
+
+Two findings from probing the live API, both of which cost money to not know:
+
+**1. The hit count is only in an HTTP header.** Fireworks returns
+`prompt_tokens_details.cached_tokens` in the response body, present and **always 0**,
+while the real number rides in `fireworks-cached-prompt-tokens`. That is the worst shape
+a discrepancy can take — it looks like an answer. Reading the body billed every Fireworks
+token at the uncached rate. `ChatProvider` now goes through `with_raw_response` and
+prefers the header.
+
+**2. The granularity is per-model.** Repeating an identical prefix and reading the header:
+
+| prompt tokens | glm-5.3-flash | deepseek-v4-pro |
 |---|---|---|
-| glm-5.3-flash | $0.147 | $0.147 |
-| deepseek-v4-flash | $0.146 | **$0.119** |
-| qwen-3.7-plus | **$0.423** | $0.760 |
-| deepseek-v4-pro | **$0.879** | $1.021 |
-| glm-5.3 | $1.307 | $1.307 |
-| qwen-3.8-max | $1.634 | $1.634 |
-| kimi-k3 | $3.029 | $3.029 |
+| ~1,800 | 0 (0%) | 1,805 (100%) |
+| ~5,400 | 4,096 (76%) | 5,405 (100%) |
+| ~12,000 | 10,240 (85%) | 12,005 (100%) |
+| ~20,000 | 18,432 (92%) | 20,005 (100%) |
 
-That 86.3% is the number the platform choice turns on, and it is not an accident: an
-agent loop resends the entire transcript every step, so by step 20 almost every input
-token is one the server has already seen. **Headline input price is nearly irrelevant
-here; the cached-input rate is the bill.** Fireworks prices DeepSeek V4 Pro's cache at
-$0.044 against Together's $0.13 — 3x — and that alone is the 14% gap in the table.
+GLM 5.3 Flash caches in **2048-token blocks** — every hit above is an exact multiple —
+so a prefix under 2048 tokens caches *nothing*. DeepSeek V4 Pro caches at token
+granularity and hits ~100% at every size. This repo's prompts are ~1,400–1,800 tokens,
+which is why a real eval on the default model reports a 0.0% hit rate and is not
+broken.
 
-It also sets the price of the fallback: a degraded run costs up to ~20% more, never a
-different order of magnitude. That is cheap enough that failing over eagerly is the
-right default, and expensive enough that it has to be visible. Both are true below.
+The practical consequence: **the cached-input column only applies to a workload whose
+prefixes are long enough to earn it.** A longer system prompt, more tools, or a
+50-turn task moves `deepseek-v4-pro` from $1.071 to $0.210; nothing moves
+`glm-5.3-flash` until the prefix clears 2048 tokens.
 
 ## Everything else
 
@@ -74,7 +103,7 @@ right default, and expensive enough that it has to be visible. Both are true bel
 | `seed` | documented | accepted |
 | `top_k`, `temperature`, `top_p` | documented, top-level | yes |
 | reasoning control | `reasoning_effort` (none/low/medium/high/xhigh/max/adaptive, bool, or an int budget) + `thinking` object + `reasoning_history` | `reasoning_effort` |
-| cached input | 3–10% of input on the flagships | ~10–20% |
+| cached input | 3–10% of input on the flagships; hit count in a **header**, never the body | ~10–20% |
 | batch | 50% off both directions | yes |
 | rate limits | **published ceilings**: 64.8M total-prompt TPM / 16.2M uncached / 648k generated for <400B models | dynamic, unpublished, ramps with steady traffic |
 | overload | 503 Service Overloaded even inside your limit; Priority tier (~1.25–1.5x) reduces it | 429 with `x-ratelimit-reset` |
@@ -180,6 +209,10 @@ it measured Qwen and measured GLM is worse than one that crashed.
   are not bitwise identical — different kernels, different batching, possibly different
   quantisation. A run with `fallback_calls > 0` is a mixed sample, and for a benchmark
   number that matters, `FALLBACK=none` and a rerun beat a footnote.
+- **A cache-hit rate of 0% is not necessarily a bug.** Check the prompt length before
+  the plumbing: under 2048 tokens, GLM 5.3 Flash caches nothing by design. The probe
+  that establishes this is four calls and is worth rerunning when the system prompt or
+  the tool set grows.
 - **The seed buys less here than on our own box.** Continuous batching already made runs
   only near-reproducible; on a shared serverless backend the batch contains other
   tenants' traffic. Still worth sending, still not a promise. Compare runs paired.

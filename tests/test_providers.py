@@ -94,19 +94,37 @@ class _Resp:
 SDK_PARAMS = set(inspect.signature(Completions.create).parameters) - {"self"}
 
 
-class FakeClient:
-	"""Records the kwargs generate() built, so the request shape is testable."""
+class _Raw:
+	"""What with_raw_response.create() hands back: headers, and the body behind .parse()."""
 
-	def __init__(self):
+	def __init__(self, headers: dict):
+		self.headers, self._body = headers, _Resp()
+
+	def parse(self):
+		return self._body
+
+
+class FakeClient:
+	"""Records the kwargs generate() built, so the request shape is testable.
+
+	Shaped like the real client down to `with_raw_response`, because that is the only path
+	to the response headers and the headers are where Fireworks reports cache hits.
+	"""
+
+	def __init__(self, headers: dict | None = None):
 		self.seen: dict = {}
+		self.headers = {} if headers is None else headers
 		outer = self
 
-		class _Completions:
+		class _Raw_:
 			def create(self, **kw):
 				if bad := sorted(set(kw) - SDK_PARAMS):
 					raise TypeError(f"Completions.create() got unexpected keyword arguments {bad}")
 				outer.seen = kw
-				return _Resp()
+				return _Raw(outer.headers)
+
+		class _Completions:
+			with_raw_response = _Raw_()
 
 		self.chat = type("c", (), {"completions": _Completions()})()
 
@@ -122,9 +140,12 @@ class FailingClient:
 	def __init__(self, exc: Exception):
 		outer = self
 
-		class _Completions:
+		class _Raw_:
 			def create(self, **kw):
 				raise outer.exc
+
+		class _Completions:
+			with_raw_response = _Raw_()
 
 		self.exc = exc
 		self.chat = type("c", (), {"completions": _Completions()})()
@@ -279,6 +300,24 @@ def main(argv: list[str]) -> int:
 	                     and u.cost_usd > 0, str(u)))
 	results.append(check("tool calls survive the translation",
 	                     turn.tool_calls and turn.tool_calls[0].name == "done"))
+
+	#     ...and on Fireworks the body's cached_tokens is a lie. It is present and always
+	#     0 while the real count rides in a header, so believing the body bills a whole
+	#     agent run at the uncached rate. _Usage above says 900 cached; the header says 950
+	#     and must win, and the cost must fall accordingly.
+	priced = ChatProvider(backend="fireworks", client=FakeClient()).generate(
+		"hi", CATALOG["fireworks"]["deepseek-v4-pro"].id, None)
+	hdr = ChatProvider(backend="fireworks", client=FakeClient({"fireworks-cached-prompt-tokens": "950"})
+	                   ).generate("hi", CATALOG["fireworks"]["deepseek-v4-pro"].id, None)
+	results.append(check("the cache header beats the body's cached_tokens",
+	                     hdr.usage.cached_input_tokens == 950 and priced.usage.cached_input_tokens == 900))
+	results.append(check("...and a cache hit actually lowers the bill",
+	                     hdr.usage.cost_usd < priced.usage.cost_usd,
+	                     f"${hdr.usage.cost_usd:.8f} vs ${priced.usage.cost_usd:.8f}"))
+	junk = ChatProvider(backend="fireworks", client=FakeClient({"fireworks-cached-prompt-tokens": "?"})
+	                    ).generate("hi", CATALOG["fireworks"]["deepseek-v4-pro"].id, None)
+	results.append(check("an unparseable header falls back to the body",
+	                     junk.usage.cached_input_tokens == 900))
 
 	# 12. A hosted platform without its key fails at construction. The alternative is a
 	#     401 on request 200 of a shard, after the run has already cost wall-clock.
