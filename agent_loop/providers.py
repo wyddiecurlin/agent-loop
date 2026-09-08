@@ -48,6 +48,18 @@ DEFAULT_REASONING_EFFORT = "none"  # no reasoning tokens before the first output
 # re-rolls the sample, putting variance back into a run we are trying to make repeatable.
 DEFAULT_TIMEOUT_S = 600.0
 DEFAULT_MAX_RETRIES = 3
+# An interactive front end wants the opposite trade: a stall there is a person listening to
+# silence, and 600s of it is indistinguishable from a hang. AGENT_TIMEOUT_S and
+# AGENT_MAX_RETRIES override the two, and they override the *caller* as well as this
+# default -- agent_loop() binds both into its signature at import and takes no argument for
+# either, so the environment is the only way in. voice/bridge.py uses it.
+
+
+def _env(name: str, default, cast=float):
+	try:
+		return cast(os.environ[name])
+	except (KeyError, ValueError):  # unset, or a typo in .env: the default still runs
+		return default
 
 # Provider selection: PROVIDER=fireworks (default) | together | openai | qwen
 # Fireworks is the default because it is the only one of the two hosted platforms that
@@ -371,7 +383,7 @@ class OpenAIProvider:
 		kwargs: dict = {
 			"model": model,
 			"input": messages,
-			"timeout": timeout,
+			"timeout": _env("AGENT_TIMEOUT_S", timeout),
 			"reasoning": {"effort": DEFAULT_REASONING_EFFORT},
 		}
 		if tools:
@@ -609,7 +621,7 @@ class ChatProvider:
 		kwargs: dict = {
 			"model": model,
 			"messages": self._to_chat_messages(messages),
-			"timeout": timeout,
+			"timeout": _env("AGENT_TIMEOUT_S", timeout),
 			"temperature": self.temperature,
 			"top_p": DEFAULT_TOP_P,
 			"seed": self.seed,
@@ -800,6 +812,7 @@ def make_provider(name: str | None = None, timeout: float = DEFAULT_TIMEOUT_S) -
 	having asked, and silently getting none, is only a warning, because the run is still
 	the run the operator described.
 	"""
+	timeout = _env("AGENT_TIMEOUT_S", timeout)
 	name = (name or os.getenv("PROVIDER", DEFAULT_PROVIDER)).lower()
 	if name in BACKENDS:
 		primary = _chat_provider(name, timeout)
@@ -880,6 +893,7 @@ def with_retries(
 	max_delay: float = 30.0,
 ) -> ModelTurn:
 	"""Call fn, retrying transient failures with exponential backoff + jitter."""
+	max_retries = _env("AGENT_MAX_RETRIES", max_retries, int)
 	for attempt in range(max_retries + 1):
 		try:
 			return fn()
