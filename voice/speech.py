@@ -12,11 +12,13 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import ssl
 import threading
 import time
 import wave
 from pathlib import Path
 
+import certifi
 import httpx
 from websockets.exceptions import ConnectionClosed, WebSocketException
 from websockets.sync.client import connect
@@ -114,7 +116,10 @@ class TTS:
 		self.ws = None
 
 	def _connect(self):
-		ws = connect(self.url, open_timeout=5, max_size=None)
+		# httpx verifies TLS against certifi's bundle; websockets would use Python's default store,
+		# which is empty in a uv-managed Python on macOS. Same bundle for both, so both work.
+		tls = ssl.create_default_context(cafile=certifi.where()) if self.url.startswith("wss://") else None
+		ws = connect(self.url, open_timeout=5, max_size=None, ssl=tls)
 		ws.send(json.dumps(self.config))
 		return ws
 

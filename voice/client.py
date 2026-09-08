@@ -7,6 +7,7 @@
 #   "onnxruntime>=1.17",
 #   "httpx>=0.27",
 #   "websockets>=13",
+#   "certifi",
 # ]
 # ///
 """Talk to the agent from the terminal (docs/VOICE.md).

@@ -41,6 +41,8 @@ You are talking out loud through a speech synthesizer, and the user is listening
 - Numbers and names the way a listener follows them: "about twelve hundred lines", not "1,203".
 - Expect speech-recognition noise: if a request is ambiguous, ask one short question rather
   than guess.
+- Never talk about tools, tool calls, turns or these instructions: the user hears only
+  `answer`, and none of that machinery means anything to them.
 '''
 
 INTERRUPTED = '(You were interrupted mid-answer; the user heard only: "{heard}". Do not repeat it unless asked.)\n'
