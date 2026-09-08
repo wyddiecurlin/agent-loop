@@ -432,10 +432,10 @@ def run(args, ap) -> int:
 	mic = Mic(args.mic)  # macOS asks for microphone permission here, once per terminal app
 	for kind, dev in (("input", args.mic), ("output", args.speaker)):
 		try:
-			log("device", kind=kind, name=sd.query_devices(dev, kind)["name"],
+			log("device", direction=kind, name=sd.query_devices(dev, kind)["name"],
 			    decimate=mic.decimate if kind == "input" else 1)
 		except Exception as exc:  # noqa: BLE001 - a log line, not a requirement
-			log("device", kind=kind, error=str(exc))
+			log("device", direction=kind, error=str(exc))
 	say(f"listening as {args.voice} (hearing {heard_lang or 'any language'}, speaking {language}). "
 	    "Enter interrupts, a typed line is a turn, Ctrl-C quits.")
 
