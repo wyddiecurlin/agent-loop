@@ -15,6 +15,7 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY agent_loop/ /app/agent_loop/
+COPY voice/ /app/voice/
 ENV PYTHONPATH=/app PYTHONUNBUFFERED=1
 
 # Two users. The agent (PID 1, root) holds the API keys its tools use; every command

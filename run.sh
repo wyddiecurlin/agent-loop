@@ -27,7 +27,10 @@ opts=(--rm --init
 	# model-written command to it, KILL to time it out afterwards -- without CAP_KILL even
 	# root cannot signal another uid's process. no-new-privileges stops the way back up.
 	--cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add KILL --security-opt no-new-privileges)
-if [ -t 0 ] && [ -t 1 ]; then opts+=(--tty --interactive); fi
+# stdin is always attached, so a pipe reaches the agent too (voice/client.py drives
+# voice/bridge.py this way); a pseudo-terminal only when there is a terminal at both ends.
+opts+=(--interactive)
+if [ -t 0 ] && [ -t 1 ]; then opts+=(--tty); fi
 if [ -f .env ]; then opts+=(--env-file .env); fi
 # Anything set in the caller's shell wins over .env, so a provider A/B is a prefix on the
 # command rather than an edit to a secrets file:  PROVIDER=qwen ./evals.sh --dataset ...
