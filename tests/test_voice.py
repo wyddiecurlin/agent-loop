@@ -3,8 +3,7 @@
 
 	AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_voice
 
-The audio and network halves (voice/vad.py, voice/speech.py, voice/client.py) need a sound
-card and the gateway; docs/VOICE.md says how they were exercised by hand.
+tests/test_voice_audio.py covers network and playback handling with simulated audio.
 """
 
 import io
@@ -16,7 +15,7 @@ from agent_loop.loop import AgentRun, log
 from voice import bridge
 from voice.turns import (
 	ACKS, REASSURE, TOOL_LINE, BargeIn, Endpointer, Narrator, frames, heard_text, spoken_tool,
-	split_sentences, usable_transcript,
+	speech_text, split_sentences, split_utterances, usable_transcript,
 )
 
 
@@ -85,19 +84,19 @@ def test_narrator() -> bool:
 	n = Narrator(seed=1)
 	ok = check("quiet before a turn is submitted", n.tick(0.0, False) is None and n.tick(100.0, False) is None)
 	n.submitted(10.0)
-	ok &= check("nothing in the first 400 ms", n.tick(10.3, False) is None)
-	ack = n.tick(10.5, False)
-	ok &= check("acknowledges once the agent has been quiet 400 ms", ack in ACKS, repr(ack))
-	ok &= check("never talks over itself", n.tick(11.0, True) is None)
-	n.tool("fs_read", 11.0)
-	ok &= check("a tool line waits for the 2.5 s gap", n.tick(12.0, False) is None)
-	line = n.tick(13.1, False)
-	ok &= check("then announces the tool in words", line is not None and "file read tool" in line, repr(line))
-	n.tool("fs_read", 14.0)
+	ok &= check("fast answers need no filler", n.tick(11.4, False) is None)
+	ack = n.tick(11.6, False)
+	ok &= check("acknowledges after 1.5 seconds", ack in ACKS, repr(ack))
+	ok &= check("never talks over itself", n.tick(12.0, True) is None)
+	n.tool("fs_read", 12.0)
+	ok &= check("a tool line waits for the 2.5 s gap", n.tick(13.0, False) is None)
+	line = n.tick(14.2, False)
+	ok &= check("then describes the activity", line == "I'm reading the file.", repr(line))
+	n.tool("fs_read", 15.0)
 	ok &= check("the same tool again is not worth repeating", n.tick(20.0, False) is None)
 	n.tool("shell_run", 20.0)
 	line = n.tick(20.0, False)
-	ok &= check("a different tool is announced", line is not None and "shell run tool" in line, repr(line))
+	ok &= check("a different tool is announced", line == "I'm running a command.", repr(line))
 	ok &= check("reassures after 12 s of silence", n.tick(32.5, False) in REASSURE)
 	ok &= check("but not before the next 12 s", n.tick(40.0, False) is None)
 	n.tick(44.6, False)
@@ -109,12 +108,12 @@ def test_narrator() -> bool:
 	n.submitted(0.0)
 	n.tool("web_search", 0.2)
 	line = n.tick(0.25, False)
-	ok &= check("an early tool call is announced instead of an um", line is not None and "web search tool" in line, repr(line))
+	ok &= check("an early tool call gets a plain activity update", line == "I'm searching the web.", repr(line))
 	lines = set()
 	for _ in range(20):
 		n = Narrator(seed=None)
 		n.submitted(0.0)
-		lines.add(n.tick(1.0, False))
+		lines.add(n.tick(2.0, False))
 	ok &= check("acknowledgements vary", len(lines) > 1, str(lines))
 	return ok
 
@@ -123,10 +122,10 @@ def test_heard() -> bool:
 	s = [("One.", 0, 100), ("Two.", 100, 300), ("Three.", 300, None)]
 	ok = check("nothing played, nothing heard", heard_text(s, 0) == "")
 	ok &= check("a finished sentence counts", heard_text(s, 100) == "One.")
-	ok &= check("more than half of the next counts too", heard_text(s, 210) == "One. Two.")
-	ok &= check("less than half does not", heard_text(s, 140) == "One.")
-	ok &= check("an unfinished sentence counts after half a second", heard_text(s, 300 + 24_000) == "One. Two. Three.")
-	ok &= check("but not before", heard_text(s, 300 + 1000) == "One. Two.")
+	ok &= check("a partial word is not counted", heard_text(s, 210) == "One.")
+	ok &= check("an unfinished generation has no known duration", heard_text(s, 300 + 24_000) == "One. Two.")
+	ok &= check("a partial answer reports a prefix instead of claiming the whole answer",
+	            heard_text([("One two three four.", 100, 500)], 300) == "One two")
 	return ok
 
 
@@ -150,6 +149,23 @@ def test_sentences() -> bool:
 	ok &= check("tiny fragments ride with the next sentence",
 	            split_sentences("No. It failed because the test was wrong.") == ["No. It failed because the test was wrong."])
 	ok &= check("empty in, nothing out", split_sentences("  ") == [])
+	ok &= check("short answers share one utterance for continuous delivery",
+	            split_utterances("All done here. The tests pass.") == ["All done here. The tests pass."])
+	long = "word " * 180
+	chunks = split_utterances(long)
+	ok &= check("long answers are bounded without dropping words",
+	            all(len(c) <= 300 for c in chunks) and " ".join(chunks) == long.strip())
+	long = "\u4e2d" * 701
+	chunks = split_utterances(long)
+	ok &= check("unspaced text is bounded too", all(len(c) <= 300 for c in chunks) and "".join(chunks) == long)
+	ok &= check("formatting and vocal cues do not reach the synthesizer",
+	            speech_text("<think>private</think><|im_start|>**Done.** [laughs] See [the result](https://example.com).")
+	            == "Done. See the result.")
+	ok &= check("code blocks get a spoken reference",
+	            speech_text("Here it is.\n```python\nprint(42)\n```\nAll done.")
+	            == "Here it is. The code is shown in the terminal. All done.")
+	ok &= check("inline values survive", speech_text("Set `x` to 3.5, then read foo_bar.py.")
+	            == "Set x to 3.5, then read foo_bar.py.")
 	return ok
 
 

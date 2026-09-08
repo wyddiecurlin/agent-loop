@@ -36,6 +36,8 @@ VOICE_RULES = '''
 
 You are talking out loud through a speech synthesizer, and the user is listening, not reading.
 - `answer` is spoken: one to three short sentences, plain conversational words.
+- Keep a calm, matter-of-fact conversational tone across turns. Do not add filler sounds,
+  laughter, stage directions, exaggerated excitement, or an enthusiastic preamble.
 - No markdown, bullets, code, URLs or file paths in `answer` unless the user asks to hear
   them. Say what you did and what came of it; anything long goes into a file, and you say where.
 - Numbers and names the way a listener follows them: "about twelve hundred lines", not "1,203".
@@ -45,7 +47,7 @@ You are talking out loud through a speech synthesizer, and the user is listening
   `answer`, and none of that machinery means anything to them.
 '''
 
-INTERRUPTED = '(You were interrupted mid-answer; the user heard only: "{heard}". Do not repeat it unless asked.)\n'
+INTERRUPTED = '(You were interrupted mid-answer; the estimated heard prefix is: "{heard}". The cutoff is approximate; do not assume the rest was heard.)\n'
 
 
 def emit(obj: dict) -> None:
@@ -95,7 +97,7 @@ def serve(stdin, runtime: DockerRuntime) -> None:
 		if not prompt:
 			continue
 		if heard is not None:
-			prompt = INTERRUPTED.format(heard=heard or "nothing") + prompt
+			prompt = INTERRUPTED.format(heard=heard or "no confirmed words") + prompt
 			heard = None
 		try:
 			run = agent_loop(prompt, runtime, history=history,

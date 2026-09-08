@@ -111,14 +111,24 @@ class BargeIn:
 
 # --- what to say while the agent works ---------------------------------------------------
 
-ACKS = ("Mm-hm.", "Okay.", "Um, let me think.", "Right, one sec.", "Let me see.")
+ACKS = ("Let me check that.", "I'll take a look.")
 ANNOUNCE = (
-	"Alright, I'm using the {tool} tool.",
-	"Okay, {tool} tool now.",
-	"Let me use the {tool} tool.",
-	"Right, on to the {tool} tool.",
+	"I'm using the {tool} tool.",
 )
-REASSURE = ("Still on it.", "Um, still working on this.", "Hang on, this is taking a bit.")
+TOOL_ANNOUNCEMENTS = {
+	"fs_list": "I'm checking the files.",
+	"fs_read": "I'm reading the file.",
+	"fs_search": "I'm searching the files.",
+	"fs_write": "I'm writing the file.",
+	"fs_patch": "I'm updating the file.",
+	"shell_run": "I'm running a command.",
+	"web_search": "I'm searching the web.",
+	"web_fetch": "I'm reading the page.",
+	"multiply": "I'm checking the calculation.",
+	"substract": "I'm checking the calculation.",
+	"get_today_date": "I'm checking the date.",
+}
+REASSURE = ("I'm still working on this.", "This is taking a little longer.")
 
 SPOKEN_WORDS = {"fs": "file", "substract": "subtract", "today": "today's"}
 
@@ -130,7 +140,7 @@ def spoken_tool(name: str) -> str:
 
 @dataclass
 class NarratorConfig:
-	ack_after_s: float = 0.4        # silence after the user's turn before a "mm-hm"
+	ack_after_s: float = 1.5        # fast answers need no acknowledgement
 	gap_s: float = 2.5              # least time between two spoken lines
 	repeat_tool_after_s: float = 8.0  # the same tool again is worth a word only after this
 	reassure_every_s: float = 12.0
@@ -175,7 +185,7 @@ class Narrator:
 		if self.pending is not None and (self.last_spoken is None or quiet_for >= c.gap_s):
 			name, self.pending = self.pending, None
 			self.last_tool, self.last_tool_at, self.last_spoken = name, now, now
-			return self._pick(ANNOUNCE).format(tool=spoken_tool(name))
+			return TOOL_ANNOUNCEMENTS.get(name) or self._pick(ANNOUNCE).format(tool=spoken_tool(name))
 		if self.last_spoken is None:
 			if quiet_for < c.ack_after_s:
 				return None
@@ -199,14 +209,48 @@ SENTENCE_BREAK = re.compile(r"(?<=[.!?…])\s+(?=\S)|\n+")
 
 
 def split_sentences(text: str) -> list[str]:
-	"""The answer as sentences, to synthesize one at a time: the TTS server treats one input
-	as one utterance, and a cut-off is only known to the sentence if the sentences were
-	separate utterances. Fragments under eight characters ("No.") ride with the next one."""
+	"""Split at sentence ends; fragments under eight characters ride with the next one."""
 	parts = [p.strip() for p in SENTENCE_BREAK.split(text or "") if p and p.strip()]
 	merged: list[str] = []
 	for part in parts:
 		if merged and len(merged[-1]) < 8:
 			merged[-1] = f"{merged[-1]} {part}"
+		else:
+			merged.append(part)
+	return merged
+
+
+def speech_text(text: str) -> str:
+	"""Remove synthesis cues and formatting that can leak out of a text answer."""
+	text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text or "")
+	text = re.sub(r"<think>.*?(?:</think>|$)", "", text, flags=re.S | re.I)
+	text = re.sub(r"<\|[^<>]*\|>", "", text)
+	text = re.sub(r"(?ms)^\s*(`{3,}|~{3,})[^\n]*\n.*?(?:^\s*\1\s*$|\Z)",
+	              " The code is shown in the terminal. ", text)
+	text = re.sub(r"[\[(](?:laughs?|laughing|chuckles?|chuckling|sighs?|sighing|giggles?|giggling)[\])]",
+	              "", text, flags=re.I)
+	text = re.sub(r"(?m)^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s*)", "", text)
+	text = re.sub(r"\[([^\]]+)\]\(https?://[^\s)]+\)", r"\1", text)
+	text = re.sub(r"(`+|\*{1,2})(.*?)\1", r"\2", text)
+	text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", text)
+	return re.sub(r"\s+", " ", text).strip()
+
+
+def split_utterances(text: str, max_chars: int = 300) -> list[str]:
+	"""Keep a short answer in one generation for prosody; bound longer requests."""
+	parts: list[str] = []
+	for sentence in split_sentences(speech_text(text)):
+		while len(sentence) > max_chars:
+			cut = sentence.rfind(" ", 0, max_chars + 1)
+			cut = cut if cut > 0 else max_chars
+			parts.append(sentence[:cut].strip())
+			sentence = sentence[cut:].strip()
+		if sentence:
+			parts.append(sentence)
+	merged: list[str] = []
+	for part in parts:
+		if merged and len(merged[-1]) + len(part) + 1 <= max_chars:
+			merged[-1] += " " + part
 		else:
 			merged.append(part)
 	return merged
@@ -227,23 +271,24 @@ def usable_transcript(text: str) -> str | None:
 	return text
 
 
-def heard_text(sentences, played: int, partial_bytes: int = 24_000) -> str:
-	"""What the user heard of an answer cut at `played` bytes.
+def heard_text(sentences, played: int) -> str:
+	"""Estimate the heard prefix from absolute playback offsets.
 
-	`sentences` are (text, first_byte, last_byte | None) in playback order, offsets in the
-	same byte space as `played`. A sentence counts once more than half of it came out of
-	the speaker; an unfinished one counts after `partial_bytes` (half a second at 24 kHz).
+	Without word alignment a partial utterance is only an estimate. Count a proportional
+	prefix, rounded down, rather than claiming the whole answer was heard halfway through.
+	If generation is unfinished its duration is unknown, so omit that utterance.
 	"""
 	heard = []
 	for text, start, end in sentences:
 		if end is None:
-			if played >= start + partial_bytes:
-				heard.append(text)
 			break
 		if played >= end:
 			heard.append(text)
 			continue
-		if played >= start + (end - start) // 2:
-			heard.append(text)
+		if played > start:
+			words = text.split()
+			count = int(len(words) * (played - start) / (end - start))
+			if count:
+				heard.append(" ".join(words[:count]))
 		break
 	return " ".join(heard)

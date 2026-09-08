@@ -6,8 +6,6 @@
 #   "numpy>=1.26",
 #   "onnxruntime>=1.17",
 #   "httpx>=0.27",
-#   "websockets>=13",
-#   "certifi",
 # ]
 # ///
 """Talk to the agent from the terminal (docs/VOICE.md).
@@ -20,8 +18,8 @@ container, started through ./run.sh with voice/bridge.py as the entrypoint, and 
 process talks to it over stdin/stdout.
 
 	mic -> Silero VAD -> end of turn -> Whisper -> bridge -> agent_loop
-	                                                 \\-> [tool] events -> "Alright, I'm using the file read tool."
-	answer -> Qwen3-TTS websocket -> speaker, cut the moment the user talks over it
+	                                                 \\-> [tool] events -> "I'm reading the file."
+	answer -> Qwen3-TTS HTTP stream -> speaker, cut the moment the user talks over it
 
 Keys: Enter interrupts; a typed line is a turn without the microphone; Ctrl-C quits.
 """
@@ -46,7 +44,7 @@ import sounddevice as sd
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from voice.speech import DEFAULT_API, STT, TTS, TTS_RATE, Clips, ensure_silero  # noqa: E402
+from voice.speech import DEFAULT_API, STT, TTS, TTS_LANGUAGES, TTS_RATE, Clips, ensure_silero  # noqa: E402
 from voice.turns import (  # noqa: E402
 	ACKS, REASSURE, TOOL_LINE, BargeIn, EndpointConfig, Endpointer, Narrator, heard_text, usable_transcript,
 )
@@ -201,7 +199,7 @@ class Speech:
 	"""One answer on its way out: a thread feeding the TTS stream into the speaker."""
 
 	def __init__(self, tts: TTS, speaker: Speaker, text: str):
-		self.speaker = speaker
+		self.tts, self.speaker = tts, speaker
 		self.cancel = threading.Event()
 		self.sentences: list = []
 		self.start: int | None = None
@@ -214,11 +212,10 @@ class Speech:
 			time.sleep(0.02)
 		self.speaker.stop()
 		self.start = self.speaker.enqueued
+		say(f"{BOLD}agent>{RESET} {text}")
 		try:
-			tts.speak(text, self.speaker, self.cancel, sentences=self.sentences,
-			          on_sentence=lambda s: say(f"{BOLD}agent>{RESET} {s}"))
+			tts.speak(text, self.speaker, self.cancel, sentences=self.sentences)
 		except Exception as exc:  # noqa: BLE001
-			say(f"{BOLD}agent>{RESET} {text}")
 			dim(f"  (no speech: {exc})")
 
 	def done(self) -> bool:
@@ -226,9 +223,10 @@ class Speech:
 
 	def interrupt(self) -> str:
 		"""Cut playback and return what was heard, so the agent's history can say so."""
-		heard = "" if self.start is None else heard_text(self.sentences, self.speaker.consumed - self.start)
+		heard = "" if self.start is None else heard_text(self.sentences, self.speaker.consumed)
 		self.cancel.set()
 		self.speaker.stop()
+		self.tts.close()
 		return heard
 
 
@@ -237,37 +235,47 @@ class Narration:
 
 	def __init__(self, clips: Clips, speaker: Speaker, answer_playing):
 		self.clips, self.speaker, self.answer_playing = clips, speaker, answer_playing
-		self.q: queue.Queue[str | None] = queue.Queue()
-		threading.Thread(target=self._run, daemon=True).start()
+		self.q: queue.Queue[tuple[int, str] | None] = queue.Queue()
+		self.lock = threading.Lock()
+		self.generation = 0
+		self.thread = threading.Thread(target=self._run, daemon=True)
+		self.thread.start()
 
 	def offer(self, text: str) -> None:
-		self.q.put(text)
+		with self.lock:
+			self.q.put((self.generation, text))
 
 	def mute(self) -> None:
-		while not self.q.empty():
-			try:
-				self.q.get_nowait()
-			except queue.Empty:
-				break
+		with self.lock:
+			self.generation += 1  # also invalidates a clip currently being fetched
+			while not self.q.empty():
+				try:
+					self.q.get_nowait()
+				except queue.Empty:
+					break
 
 	def close(self) -> None:
+		self.mute()
 		self.q.put(None)
 
 	def _run(self) -> None:
 		while True:
-			text = self.q.get()
-			if text is None:
+			item = self.q.get()
+			if item is None:
 				return
-			if self.answer_playing():
-				continue
+			generation, text = item
+			with self.lock:
+				if generation != self.generation or self.answer_playing():
+					continue
 			try:
 				pcm = self.clips.get(text)
 			except Exception as exc:  # noqa: BLE001
 				dim(f"  (filler failed: {exc})")
 				continue
-			if not self.answer_playing():
-				dim(f"  {text}")
-				self.speaker.play(pcm)
+			with self.lock:
+				if generation == self.generation and not self.answer_playing() and not self.speaker.busy():
+					dim(f"  {text}")
+					self.speaker.play(pcm)
 
 
 # --- the loop -----------------------------------------------------------------------------
@@ -277,22 +285,26 @@ def main(argv: list[str] | None = None) -> int:
 	ap.add_argument("--api", default=os.environ.get("VOICE_API", DEFAULT_API))
 	ap.add_argument("--voice", default=os.environ.get("VOICE", "ryan"))
 	ap.add_argument("--lang", default="en", help="what you speak, as an ISO code, for Whisper")
-	ap.add_argument("--tts-lang", default="Auto", help="Qwen3-TTS language name, or Auto")
-	ap.add_argument("--instructions", default=None, help="TTS style hint, e.g. 'casual and warm'")
+	ap.add_argument("--tts-lang", default=None, help="Qwen3-TTS language name; defaults to --lang, or Auto if unknown")
+	ap.add_argument("--instructions", default=None, help="style for all speech; defaults to calm, steady delivery")
+	ap.add_argument("--tts-seed", type=int, default=42, help="sampling seed shared by answers and cached lines")
+	ap.add_argument("--no-narration", action="store_true", help="speak only answers")
 	ap.add_argument("--endpoint-ms", type=int, default=600, help="silence that ends your turn")
 	ap.add_argument("--mic", default=None, help="input device name or index")
 	ap.add_argument("--speaker", default=None, help="output device name or index")
 	ap.add_argument("--list-devices", action="store_true")
 	args = ap.parse_args(argv)
+	tts_language = args.tts_lang or TTS_LANGUAGES.get(args.lang.lower().split("-")[0], "Auto")
 	if args.list_devices:
 		print(sd.query_devices())
 		return 0
 
 	vad = SileroVAD(ensure_silero(CACHE))
 	speaker = Speaker(args.speaker)
-	clips = Clips(args.api, args.voice, args.tts_lang, CACHE / "clips")
-	clips.prefetch(list(ACKS) + list(REASSURE))  # tool lines are made on first use
-	tts = TTS(args.api, args.voice, args.tts_lang, args.instructions)
+	clips = Clips(args.api, args.voice, tts_language, CACHE / "clips", args.instructions, args.tts_seed)
+	if not args.no_narration:
+		clips.prefetch(list(ACKS) + list(REASSURE))  # tool lines are made on first use
+	tts = TTS(args.api, args.voice, tts_language, args.instructions, args.tts_seed)
 	stt = STT(args.api, args.lang, STT_PROMPT)
 	pool = ThreadPoolExecutor(max_workers=2)
 
@@ -338,6 +350,7 @@ def main(argv: list[str] | None = None) -> int:
 		narrator.submitted(time.monotonic())
 
 	def interrupt() -> None:
+		narrator.answered()
 		narration.mute()
 		if speech is not None and not speech.done():
 			heard = speech.interrupt()
@@ -375,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
 					narrator.answered()
 					narration.mute()
 					text = ev.get("text") or ""
-					to_speak.append(text if ev.get("ok") else f"Hmm, I hit a problem. {text}")
+					to_speak.append(text if ev.get("ok") else f"I hit a problem. {text}")
 					if pending:
 						submit(pending.popleft())
 				elif kind == "exit":
@@ -432,7 +445,7 @@ def main(argv: list[str] | None = None) -> int:
 					utterance = speculation = None
 
 			line = narrator.tick(now, speaking=(speech is not None) or speaker.busy() or endpointer.in_speech)
-			if line:
+			if line and not args.no_narration:
 				narration.offer(line)
 	except KeyboardInterrupt:
 		return 0
