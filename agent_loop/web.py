@@ -33,9 +33,6 @@ TIMEOUT_S = 30.0
 MAX_BODY_BYTES = 10_000_000
 MAX_REDIRECTS = 10
 TEXT_TYPES = ("text/", "application/json", "application/xml", "application/xhtml")
-
-# What the extraction model reads. Claude Code hands Haiku 100K chars; the 9B box gets
-# less because ~15K tokens of page has to fit its window with room for an answer.
 MAX_PAGE_CHARS = 60_000
 MAX_ANSWER_TOKENS = 1024
 EXTRACT_SYSTEM = (
