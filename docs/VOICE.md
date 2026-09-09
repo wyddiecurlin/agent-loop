@@ -184,6 +184,12 @@ End of your speech to the agent's first sound, chat-style turn, gateway over Tai
 | TTS first audio + network | ~170 ms (132–165 ms measured on the box) | same |
 | **total**, filler heard at 450 ms | **1.4–2.0 s** | **1.0–1.6 s** |
 
+With the gateway on the GPU box itself (`docs/DEPLOY.md`), measured 2026-09-09 through nginx
+from the tailnet: a text turn reaches its first spoken sentence in 1.1–1.2 s and the first
+emotion in 0.7 s, so speech-to-first-sound is ~1.7 s with the 600 ms endpoint. The remaining
+time is the model generating its `done` call at ~90 tok/s, not the network; Smart Turn is the
+next cut.
+
 Tool-using tasks take as long as they take; the preamble lands about 300 ms after the prompt
 (measured on the qwen box, before the first tool call) and the hold lines cover the rest.
 
@@ -201,7 +207,7 @@ are `STATUS_LINES`, per language. The robot's numbers are `RobotConfig` at the t
 ## Mobile iOS / Mimo
 
 `../pet-moment/mobile-app/gateway/voice_worker.py` adapts the same `voice.client.run`
-loop to the iOS app. The phone streams 16 kHz mono PCM16 and plays 24 kHz robot audio.
+loop to the iOS app. In production the gateway runs on the GPU box (`docs/DEPLOY.md`). The phone streams 16 kHz mono PCM16 and plays 24 kHz robot audio.
 The harness still owns VAD, endpointing, STT, TTS, and barge-in. Do not run a second
 desktop `voice/client.py` listener for the mobile app: it creates a separate conversation
 and can hear the phone's output without driving its eyes.
@@ -324,3 +330,47 @@ services (`voice_smoke.py` in the session scratchpad, easy to recreate from
 Silero at 0.14 ms per frame with the endpointer opening 150 ms into speech and closing
 570 ms after it, Whisper at 178 ms for a 7 s utterance with a correct transcript and an
 empty one for silence.
+
+
+## Per-turn output and context controls
+
+The bridge accepts optional `max_output_tokens` (integer 1–65536) and `mode`
+(`auto-clear` or `compaction`) on `clock` / `configure` messages as connection
+settings, and on `prompt` as a one-turn override. Omitted values retain the
+connection defaults; explicit null removes an override. Existing clients that send
+neither retain their original behavior.
+
+```json
+{"type":"clock","tz":"America/Los_Angeles","max_output_tokens":128,"mode":"auto-clear"}
+{"type":"prompt","text":"Hello"}
+{"type":"prompt","text":"Explain briefly","max_output_tokens":256}
+```
+
+The cap applies to each main-agent generation, including fallback, rather than the
+sum across tool steps. Capped voice requests use the model's lowest supported
+reasoning setting and ask for one or two sentences / at most 35 words. This keeps
+local Qwen's optional thinking from consuming its mobile answer budget. Always-on
+reasoning models may still require a larger budget. Tool arguments count toward
+the same cap; it is not a guarantee of a valid final answer or of speech duration.
+
+`agent_loop/context.py` uses `CATALOG[provider][alias].context` as the model map,
+with the smaller serving window when a fallback provider is configured. Custom
+models default conservatively to 32768; `CONTEXT_WINDOW_TOKENS` overrides the
+serving limit and is forwarded by `run.sh`. OpenAI catalog windows were corrected
+to 400000 from the official model pages on 2026-09-09:
+[GPT-5](https://developers.openai.com/api/docs/models/gpt-5),
+[GPT-5 Mini](https://developers.openai.com/api/docs/models/gpt-5-mini),
+[GPT-5 Nano](https://developers.openai.com/api/docs/models/gpt-5-nano), and
+[GPT-5.4 Nano](https://developers.openai.com/api/docs/models/gpt-5.4-nano).
+
+Auto-clear removes complete previous turns at 90% estimated input plus reserved
+output. Provider input usage (including cache hits) anchors the estimate, with
+conservative UTF-8 byte growth for new content and schema overhead. Missing usage
+falls back to byte estimates. The current prompt, interrupted/heard note, system
+instructions and current tool work remain. An oversized current turn fails without
+replaying actions. The bridge emits `context_cleared` for observers. Compaction is
+reserved and does nothing for now. Tests:
+
+```sh
+AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m unittest tests.test_context -v
+```

@@ -53,7 +53,9 @@ from dotenv import load_dotenv
 from agent_loop.loop import PERSONA, SYSTEM_PROMPT, agent_loop, stamp
 from agent_loop.providers import BACKENDS, TRACKER, ChatProvider, Message, default_model, make_provider
 from agent_loop.runtime import DockerRuntime
-from agent_loop.tools import DONE_TOOL
+from agent_loop.tools import DONE_TOOL, build_registry
+from agent_loop.context import ContextBudget
+from agent_loop.providers import validate_output_tokens
 
 from voice.turns import TOOL_LINE
 from voice.emotions import LiveEmotions, observe_stream
@@ -86,6 +88,11 @@ You are talking out loud through a speech synthesizer, and the user is listening
 - If an earlier assistant line in this conversation says you are about to look something
   up, you said it out loud already: do not say it again, just give what you found.
 '''
+
+CAPPED_VOICE_RULES = (
+	"\nKeep the spoken answer to one or two short sentences, at most 35 words. "
+	"Leave room in the output budget for complete tool-call JSON.\n"
+)
 
 # The parallel call: the same character, asked only whether the turn will take a moment.
 PREAMBLE_PROMPT = PERSONA + '''
@@ -236,6 +243,18 @@ def usage_since(before: dict, calls: int) -> dict:
 	return delta
 
 
+def turn_options(message, defaults=None):
+	options = dict(defaults or {})
+	for key in ("max_output_tokens", "mode"):
+		if key in message:
+			options[key] = message[key]
+	if options.get("max_output_tokens") is not None:
+		validate_output_tokens(options["max_output_tokens"])
+	if options.get("mode") not in (None, "auto-clear", "compaction"):
+		raise ValueError("mode must be auto-clear or compaction")
+	return options
+
+
 def serve(stdin, runtime: DockerRuntime, preamble: Callable[[list | None, str], str | None] | None = None,
           emotion_workers=None) -> None:
 	"""One turn per prompt line. `preamble(history, prompt)` runs beside each turn on its
@@ -244,6 +263,8 @@ def serve(stdin, runtime: DockerRuntime, preamble: Callable[[list | None, str], 
 	heard = None
 	turn = 0
 	emotions = None
+	defaults = {}
+	budgets = {}
 	for line in stdin:
 		line = line.strip()
 		if not line:
@@ -253,7 +274,15 @@ def serve(stdin, runtime: DockerRuntime, preamble: Callable[[list | None, str], 
 		except ValueError:
 			emit({"type": "error", "text": f"not JSON: {line[:80]}"})
 			continue
-		if msg.get("type") == "clock":
+		if not isinstance(msg, dict):
+			emit({"type": "error", "text": "expected a JSON object"})
+			continue
+		if msg.get("type") in ("clock", "configure"):
+			try:
+				defaults = turn_options(msg, defaults)
+			except ValueError as exc:
+				emit({"type": "error", "text": str(exc)})
+				continue
 			set_clock(msg.get("tz") or "")
 			if msg.get('emotions') is True and emotions is None and emotion_workers is not None:
 				emotions = LiveEmotions(emit)
@@ -270,6 +299,26 @@ def serve(stdin, runtime: DockerRuntime, preamble: Callable[[list | None, str], 
 		if heard is not None:
 			prompt = INTERRUPTED.format(heard=heard or "nothing") + prompt
 			heard = None
+		try:
+			options = turn_options(msg, defaults)
+			system_prompt = SYSTEM_PROMPT + VOICE_RULES
+			if options.get("max_output_tokens") is not None:
+				system_prompt += CAPPED_VOICE_RULES
+			budget = None
+			if mode := options.get("mode"):
+				if mode not in budgets:
+					budgets[mode] = ContextBudget(mode)
+				budget = budgets[mode]
+			# Clear before the preamble starts, so it sees the same conversation.
+			if budget is not None and history:
+				preview = [Message(role="system", content=stamp(system_prompt)),
+				           *history[1:], Message(role="user", content=prompt)]
+				if budget.prepare(preview, build_registry(runtime).schema(), len(history), options.get("max_output_tokens")):
+					history = None
+					emit({"type": "context_cleared", "mode": mode})
+		except (ValueError, TypeError) as exc:
+			emit({"type": "answer", "ok": False, "text": str(exc), "steps": 0, "stop_reason": "error"})
+			continue
 		turn += 1
 		if emotions is not None:
 			emotions.begin(turn, prompt)
@@ -291,7 +340,9 @@ def serve(stdin, runtime: DockerRuntime, preamble: Callable[[list | None, str], 
 		try:
 			with observe_stream(emotions):
 				run = agent_loop(prompt, runtime, history=history,
-				                 system_prompt=SYSTEM_PROMPT + VOICE_RULES, verbose=False)
+				                 system_prompt=system_prompt, verbose=False,
+				                 max_output_tokens=options.get("max_output_tokens"), context_budget=budget,
+				                 thinking=False if options.get("max_output_tokens") is not None else None)
 		except Exception as exc:  # noqa: BLE001 - a crash is still an answer to speak
 			error = f"{type(exc).__name__}: {exc}"
 			gate.finish()
@@ -304,6 +355,9 @@ def serve(stdin, runtime: DockerRuntime, preamble: Callable[[list | None, str], 
 		gate.finish()
 		if emotions is not None and run.answer:
 			emotions.feed(run.answer, replace=True)
+		if run.history_cleared:
+			before = 1
+			emit({"type": "context_cleared", "mode": options.get("mode")})
 		history = run.messages
 		if gate.said:
 			# It was spoken, so it is part of the conversation: after the user's words,

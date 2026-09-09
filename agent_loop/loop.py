@@ -32,6 +32,7 @@ from .providers import (
 	with_retries,
 )
 
+from .context import ContextBudget
 from .runtime import DockerRuntime
 from .tools import DONE_TOOL, ToolResult, build_registry
 
@@ -58,6 +59,8 @@ def generate(
 	max_retries: int = DEFAULT_MAX_RETRIES,
 	tracker: CostTracker | None = None,
 	tool_choice: str | None = None,
+	max_output_tokens: int | None = None,
+	thinking: bool | None = None,
 ) -> ModelTurn:
 	"""Generate a ModelTurn for the given messages, with retries, timeout, and cost tracking."""
 	if tools is None:
@@ -67,10 +70,15 @@ def generate(
 	if model is None:
 		model = default_model()
 
+	overrides = {}
+	if max_output_tokens is not None:
+		overrides["max_output_tokens"] = max_output_tokens
+	if thinking is not None:
+		overrides["thinking"] = thinking
 	turn = with_retries(
 		lambda: provider.generate(
 			messages, model, tools, stream=stream, on_text=on_text, on_tool_call=on_tool_call,
-			timeout=timeout, tool_choice=tool_choice,
+			timeout=timeout, tool_choice=tool_choice, **overrides,
 		),
 		max_retries=max_retries,
 	)
@@ -106,6 +114,7 @@ class AgentRun:
 	stop_reason: Literal["done", "max_steps", "error", "stalled"]
 	steps: int
 	error: str = ""  # set only when stop_reason == "error"
+	history_cleared: bool = False
 
 	@property
 	def ok(self) -> bool:
@@ -207,6 +216,9 @@ def agent_loop(
 	system_prompt: str = SYSTEM_PROMPT,
 	history: list[InputItem] | None = None,
 	verbose: bool = True,
+	max_output_tokens: int | None = None,
+	thinking: bool | None = None,
+	context_budget: ContextBudget | None = None,
 ) -> AgentRun:
 	"""Run tools until the model calls `done`.
 
@@ -215,6 +227,8 @@ def agent_loop(
 
 	`history` is a previous run's `messages`: pass it to continue that conversation with a
 	new user prompt instead of starting from the system prompt.
+	`max_output_tokens` and `thinking` override only this run's model requests.
+	`context_budget` may clear previous turns while preserving this run's tool work.
 
 	`verbose=False` keeps only the tool names on stderr: no step counter, no streamed
 	arguments, no turn dump, no tool output. For talking to it, not for debugging it.
@@ -226,12 +240,22 @@ def agent_loop(
 	messages: list[InputItem] = list(history) if history else [system]
 	if history and messages[0].get("role") == "system":
 		messages[0] = system  # the clock moved on since the conversation started
+	current_start = len(messages)
 	messages.append(Message(role='user', content=prompt))
+	history_cleared = False
+
+	def finish_run(reason, steps, error=""):
+		return AgentRun(messages, reason, steps, error, history_cleared)
+
 
 	stalled = 0
 	for step in range(1, max_steps + 1):
 		trace(f"[LOG] step {step}/{max_steps} ({len(messages)} items in context)")
 		try:
+			if context_budget is not None:
+				if context_budget.prepare(messages, registry.schema(), current_start, max_output_tokens):
+					current_start = 1
+					history_cleared = True
 			turn = generate(
 				messages=messages,
 				tools=registry.schema(),
@@ -239,10 +263,14 @@ def agent_loop(
 				stream=True,
 				on_text=stream,
 				on_tool_call=on_tool_call,
+				**({"max_output_tokens": max_output_tokens} if max_output_tokens is not None else {}),
+				**({"thinking": thinking} if thinking is not None else {}),
 			)
+			if context_budget is not None:
+				context_budget.observe(messages, registry.schema(), turn.usage)
 		except Exception as exc:  # noqa: BLE001
 			log(f"[ERROR] generate failed at step {step}: {type(exc).__name__}: {exc}")
-			return AgentRun(messages, "error", step - 1, f"{type(exc).__name__}: {exc}")
+			return finish_run("error", step - 1, f"{type(exc).__name__}: {exc}")
 		trace(json.dumps(asdict(turn), indent=2))
 
 		# potentially stalled agent
@@ -251,7 +279,7 @@ def agent_loop(
 			log(f"[LOG] stalled turn {stalled}/{MAX_STALLED_TURNS} (stop_reason={turn.stop_reason}, "
 			    f"{turn.usage.output_tokens if turn.usage else 0} output tokens)")
 			if stalled >= MAX_STALLED_TURNS:
-				return AgentRun(messages, "stalled", step,
+				return finish_run("stalled", step,
 				                f"{stalled} consecutive turns produced no tool call")
 			messages.append(Message(role='user', content=STALL_NUDGE))
 			continue
@@ -283,10 +311,10 @@ def agent_loop(
 				answer = result.output
 		if answer is not None:
 			messages.append(Message(role='assistant', content=answer))
-			return AgentRun(messages, "done", step)
+			return finish_run("done", step)
 
 	log(f"[LOG] hit max_steps {max_steps}")
-	return AgentRun(messages, "max_steps", max_steps)
+	return finish_run("max_steps", max_steps)
 
 
 def final_text(messages: list[InputItem] | None) -> str:

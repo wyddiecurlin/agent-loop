@@ -166,10 +166,10 @@ CATALOG: dict[str, dict[str, Model]] = {
 		"qwen3.5-9b": Model(QWEN_MODEL, 0.0, 0.0, 0.0, _TOGGLEABLE, 32_768),
 	},
 	"openai": {
-		"gpt-5.4-nano": Model("gpt-5.4-nano", 0.20, 0.02, 1.25, _TOGGLEABLE),
-		"gpt-5-nano":   Model("gpt-5-nano",   0.05, 0.005, 0.40, _TOGGLEABLE),
-		"gpt-5-mini":   Model("gpt-5-mini",   0.25, 0.025, 2.00, _TOGGLEABLE),
-		"gpt-5":        Model("gpt-5",        1.25, 0.125, 10.00, _TOGGLEABLE),
+		"gpt-5.4-nano": Model("gpt-5.4-nano", 0.20, 0.02, 1.25, _TOGGLEABLE, 400_000),
+		"gpt-5-nano":   Model("gpt-5-nano",   0.05, 0.005, 0.40, _TOGGLEABLE, 400_000),
+		"gpt-5-mini":   Model("gpt-5-mini",   0.25, 0.025, 2.00, _TOGGLEABLE, 400_000),
+		"gpt-5":        Model("gpt-5",        1.25, 0.125, 10.00, _TOGGLEABLE, 400_000),
 	},
 }
 
@@ -360,6 +360,8 @@ class Provider(Protocol):
 		on_tool_call: OnToolCall | None,
 		timeout: float,
 		tool_choice: str | None,
+		max_output_tokens: int | None = None,
+		thinking: bool | None = None,
 	) -> ModelTurn: ...
 
 
@@ -379,6 +381,8 @@ class OpenAIProvider:
 		on_tool_call: OnToolCall | None = None,
 		timeout: float = DEFAULT_TIMEOUT_S,
 		tool_choice: str | None = None,
+		max_output_tokens: int | None = None,
+		thinking: bool | None = None,
 	) -> ModelTurn:
 		kwargs: dict = {
 			"model": model,
@@ -386,6 +390,12 @@ class OpenAIProvider:
 			"timeout": _env("AGENT_TIMEOUT_S", timeout),
 			"reasoning": {"effort": DEFAULT_REASONING_EFFORT},
 		}
+		if thinking is not None:
+			kwargs["reasoning"] = {"effort": ("high" if thinking else
+			    "none" if model.startswith("gpt-5.4") else "minimal")}
+		if max_output_tokens is not None:
+			validate_output_tokens(max_output_tokens)
+			kwargs["max_output_tokens"] = max_output_tokens
 		if tools:
 			kwargs["tools"] = tools
 			if tool_choice:
@@ -592,17 +602,18 @@ class ChatProvider:
 
 	# -- how much to think -----------------------------------------------------
 
-	def _reasoning(self, kwargs: dict, extra_body: dict, spec: Model | None) -> None:
+	def _reasoning(self, kwargs: dict, extra_body: dict, spec: Model | None, thinking: bool | None = None) -> None:
 		"""Write the backend's own spelling of "think this much" into the request.
 
 		The floor is the model's, not ours: asking GLM 5.3 or Kimi K3 for "none" is a 400,
 		so the catalog's first entry is the cheapest thing each will actually accept.
 		"""
+		effective_thinking = self.thinking if thinking is None else thinking
 		if self.backend.reasoning_style == "chat_template":
-			extra_body["chat_template_kwargs"] = {"enable_thinking": self.thinking}
+			extra_body["chat_template_kwargs"] = {"enable_thinking": effective_thinking}
 			return
 		ladder = spec.reasoning if spec else _TOGGLEABLE
-		kwargs["reasoning_effort"] = self.reasoning_effort or (ladder[-1] if self.thinking else ladder[0])
+		kwargs["reasoning_effort"] = (self.reasoning_effort if thinking is None else None) or (ladder[-1] if effective_thinking else ladder[0])
 
 	def generate(
 		self,
@@ -615,7 +626,11 @@ class ChatProvider:
 		on_tool_call: OnToolCall | None = None,
 		timeout: float = DEFAULT_TIMEOUT_S,
 		tool_choice: str | None = None,
+		max_output_tokens: int | None = None,
+		thinking: bool | None = None,
 	) -> ModelTurn:
+		if max_output_tokens is not None:
+			validate_output_tokens(max_output_tokens)
 		spec = model_spec(model, self.backend.name)
 		extra_body: dict = {}
 		kwargs: dict = {
@@ -625,14 +640,14 @@ class ChatProvider:
 			"temperature": self.temperature,
 			"top_p": DEFAULT_TOP_P,
 			"seed": self.seed,
-			"max_tokens": self.max_output_tokens or (spec.max_output if spec else DEFAULT_MAX_OUTPUT_TOKENS),
+			"max_tokens": max_output_tokens if max_output_tokens is not None else (self.max_output_tokens or (spec.max_output if spec else DEFAULT_MAX_OUTPUT_TOKENS)),
 		}
 		# top_k is not an OpenAI parameter, so extra_body is the only way past the SDK -
 		# which validates keyword names against its own signature and raises before the
 		# request is ever sent, whatever the server would have accepted. Fireworks
 		# documents top_k as top-level and it still has to travel down here.
 		extra_body["top_k"] = DEFAULT_TOP_K
-		self._reasoning(kwargs, extra_body, spec)
+		self._reasoning(kwargs, extra_body, spec, thinking)
 		if extra_body:
 			kwargs["extra_body"] = extra_body
 		if tools:
@@ -903,3 +918,8 @@ def with_retries(
 			delay = min(max_delay, base_delay * (2 ** attempt)) + random.uniform(0, 1)
 			time.sleep(delay)
 	raise AssertionError("unreachable")
+
+
+def validate_output_tokens(value: int) -> None:
+	if type(value) is not int or not 1 <= value <= 65_536:
+		raise ValueError("max_output_tokens must be an integer from 1 to 65536")

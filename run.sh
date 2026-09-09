@@ -34,7 +34,7 @@ if [ -t 0 ] && [ -t 1 ]; then opts+=(--tty); fi
 if [ -f .env ]; then opts+=(--env-file .env); fi
 # Anything set in the caller's shell wins over .env, so a provider A/B is a prefix on the
 # command rather than an edit to a secrets file:  PROVIDER=qwen ./evals.sh --dataset ...
-for v in PROVIDER FALLBACK MODEL REASONING_EFFORT MAX_OUTPUT_TOKENS \
+for v in PROVIDER FALLBACK MODEL REASONING_EFFORT MAX_OUTPUT_TOKENS CONTEXT_WINDOW_TOKENS \
 	OPENAI_MODEL QWEN_MODEL QWEN_BASE_URL QWEN_THINKING QWEN_TEMPERATURE QWEN_SEED; do
 	if [ -n "${!v:-}" ]; then opts+=(-e "$v=${!v}"); fi
 done
