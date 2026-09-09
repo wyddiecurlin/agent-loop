@@ -174,24 +174,6 @@ def _looks_binary(data: bytes) -> bool:
 # binds it. Nothing here reads or writes a file on its own.
 # ---------------------------------------------------------------------------
 
-def multiply(**params) -> int:
-	res = 1
-	for _, v in params.items():
-		res *= v
-	return res
-
-
-def get_today_date() -> dict:
-	from datetime import datetime
-
-	today = datetime.now()
-	return {"month": today.month, "day": today.day, "year": today.year}
-
-
-def substract(a: int, b: int) -> int:
-	return a - b
-
-
 def fs_list(runtime: DockerRuntime, path: str = ".", recursive: bool = False, max_entries: int = 200) -> ToolResult:
 	st = runtime.stat(path)
 	if st is None:
@@ -482,39 +464,6 @@ def build_registry(runtime: DockerRuntime, allow: Iterable[str] | None = None,
 				"required": ["answer"],
 			},
 			execute=done,
-		),
-		Tool(
-			name="multiply",
-			description="Use this for all multiplication. Never compute products yourself.",
-			input_schema={
-				"type": "object",
-				"properties": {
-					"a": {"type": "number", "description": "First factor."},
-					"b": {"type": "number", "description": "Second factor."},
-					"c": {"type": "number", "description": "Optional third factor."},
-				},
-				"required": ["a", "b"],
-			},
-			execute=multiply,
-		),
-		Tool(
-			name="get_today_date",
-			description="Return today's date as month, day, and year.",
-			input_schema={"type": "object", "properties": {}},
-			execute=get_today_date,
-		),
-		Tool(
-			name="substract",
-			description="Use this for all substraction. Never compute yourself.",
-			input_schema={
-				"type": "object",
-				"properties": {
-					"a": {"type": "integer", "description": "Minuend."},
-					"b": {"type": "integer", "description": "Subtrahend."},
-				},
-				"required": ["a", "b"],
-			},
-			execute=substract,
 		),
 		Tool(
 			name="fs_list",

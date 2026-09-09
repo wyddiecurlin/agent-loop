@@ -8,15 +8,17 @@ The host audio and network code has a separate mocked suite in test_voice_audio.
 
 import io
 import json
+import re
 import sys
 
 from agent_loop.loop import AgentRun, log
 
 from voice import bridge
+from voice.echo import EchoConfig, EchoGate
 from voice.turns import (
 	MAX_UTTERANCE_S, STATUS_LINES, TOO_LONG, TOOL_LINE, BargeIn, EndpointConfig, Endpointer, Narrator,
-	frames, heard_text, speech_seconds, speech_text, speech_utterances, split_sentences, spoken_answer,
-	spoken_tool, status_language, status_line, usable_transcript,
+	NarratorConfig, all_status_lines, frames, heard_text, speech_seconds, speech_text, speech_utterances,
+	split_sentences, spoken_answer, status_language, status_lines, tool_family, usable_transcript,
 )
 
 EN, ZH = STATUS_LINES["en"], STATUS_LINES["zh"]
@@ -94,46 +96,111 @@ def test_bargein() -> bool:
 
 
 def test_narrator() -> bool:
-	n = Narrator()
+	n = Narrator(seed=3)
 	ok = check("quiet before a turn is submitted", n.tick(0.0, False) is None and n.tick(100.0, False) is None)
 	n.submitted(10.0)
-	ok &= check("quick answers have no filler", n.tick(11.1, False) is None)
-	ack = n.tick(11.3, False)
-	ok &= check("acknowledges after 1.2 seconds", ack == EN["ack"], repr(ack))
-	ok &= check("never talks over itself", n.tick(12.0, True) is None)
-	n.tool("fs_read", 12.0)
-	ok &= check("a tool line waits for the six second gap", n.tick(16.0, False) is None)
-	line = n.tick(17.4, False)
-	ok &= check("describes the action in plain language", line == EN["fs_read"], repr(line))
-	n.tool("fs_read", 18.0)
-	ok &= check("the same tool again is not worth repeating", n.tick(24.0, False) is None)
-	n.tool("shell_run", 24.0)
-	ok &= check("a different tool is announced", n.tick(24.0, False) == EN["shell_run"])
-	ok &= check("reassures after 15 s of silence", n.tick(39.1, False) == EN["reassure"])
-	ok &= check("but not before the next 15 s", n.tick(50.0, False) is None)
-	n.tick(54.2, False)
-	ok &= check("and at most twice", n.tick(70.0, False) is None)
+	ok &= check("nothing in the first half second", n.tick(10.3, False) is None)
+	filler = n.tick(10.5, False)
+	ok &= check("then a filler, a sound and not a sentence", filler in EN["fillers"] and filler != "", repr(filler))
+	ok &= check("and never 'let me check'", not any("check" in f.lower() for f in EN["fillers"]))
+	ok &= check("only one", n.tick(11.0, False) is None and n.tick(13.0, False) is None)
+	n.tool("web_search", 11.0)
+	n.tool("web_fetch", 12.0)
+	ok &= check("a tool call is not announced", n.tick(12.0, False) is None and n.tick(16.0, False) is None)
+	line = n.tick(17.6, False)
+	ok &= check("seven quiet seconds after the filler: a hold line, about the web", line == EN["hold"]["web"], repr(line))
+	ok &= check("not again for fifteen", n.tick(30.0, False) is None)
+	n.tool("shell_run", 31.0)
+	ok &= check("and the next one follows what is running now", n.tick(32.7, False) == EN["hold"]["shell"])
+	n.tick(47.8, False)
+	ok &= check("at most three", n.tick(70.0, False) is None)
 	n.answered()
 	ok &= check("silent once the answer is in", n.tick(90.0, False) is None)
-	n = Narrator()
-	n.submitted(0.0)
-	n.tool("web_search", 0.2)
-	ok &= check("even early tool calls wait for a useful pause", n.tick(0.25, False) is None)
-	ok &= check("pending action replaces the generic acknowledgement", n.tick(1.3, False) == EN["web_search"])
-	n.submitted(2.0)
-	n.tool("unfamiliar_internal_tool", 2.1)
-	ok &= check("unknown tools don't get spelled out", n.tick(3.3, False) == EN["ack"])
 
-	n = Narrator(language="zh")
+	# The preamble is the agent's own line, spoken live; while anything is heard the clock
+	# for a hold line does not run, and a filler is not owed at all.
+	n = Narrator(seed=3)
+	n.submitted(0.0)
+	n.said(0.3)
+	ok &= check("a preamble means no filler", n.tick(0.5, True) is None and n.tick(2.0, True) is None)
+	ok &= check("quiet is counted from when the speaking stopped", n.tick(8.0, False) is None
+	            and n.tick(9.1, False) == EN["hold"][""])
+	ok &= check("never talks over itself", Narrator().tick(5.0, True) is None)
+
+	# Silence is one of the fillers, on purpose: not "um" every single time.
+	picks = set()
+	for seed in range(40):
+		n = Narrator(seed=seed)
+		n.submitted(0.0)
+		picks.add(n.tick(1.0, False))
+	ok &= check("fillers vary, and sometimes there is none", len(picks) >= 3 and None in picks, str(picks))
+	n = Narrator(NarratorConfig(filler_after_s=0.2, hold_after_s=1.0, hold_every_s=1.0, max_hold=1), seed=1)
+	n.submitted(0.0)
+	n.tick(0.2, False)
+	ok &= check("the timings are configuration", n.tick(1.2, False) == EN["hold"][""] and n.tick(5.0, False) is None)
+
+	n = Narrator(language="zh", seed=1)
 	n.submitted(0.0)
 	n.tool("fs_read", 0.1)
-	ok &= check("status lines follow the language of the conversation", n.tick(1.3, False) == ZH["fs_read"])
+	n.tick(0.5, False)
+	ok &= check("status lines follow the language of the conversation", n.tick(8.0, False) == ZH["hold"]["files"])
 	ok &= check("a language with no lines of its own falls back to English",
-	            status_line("fs_read", "fr") == EN["fs_read"] and status_line("ack", "zh") == ZH["ack"])
+	            status_lines("fr") is EN and status_lines("zh") is ZH)
 	ok &= check("the spoken language is read off the turn, not a stray character",
 	            status_language("给我看一下这个文件") == "zh"
 	            and status_language("I've been thinking about 健康.") == "en"
 	            and status_language("run the tests") == "en")
+	ok &= check("every line worth caching is listed once, and the silence is not",
+	            "" not in all_status_lines() and len(all_status_lines()) == len(set(all_status_lines()))
+	            and EN["hold"]["web"] in all_status_lines() and ZH["hold"][""] in all_status_lines()
+	            and ZH["hold"][""] not in all_status_lines(("en",)))
+	ok &= check("no line laughs, announces a tool or checks anything",
+	            not any(re.search(r"(?i)tool|check|haha", line) for line in all_status_lines()))
+	return ok
+
+
+def test_echo_gate() -> bool:
+	"""A synthetic room: the speaker's blocks every 20 ms, the microphone's frames every
+	32 ms, the echo arriving 130 ms later at a quarter of the level with the room's noise
+	on top, and a person talking over it for one second in the middle."""
+	import random
+
+	rng = random.Random(1)
+	gate = EchoGate(EchoConfig(lag_s=0.2, gain=0.1))  # wrong on purpose: it has to learn
+	true_lag, true_gain = 0.13, 0.25
+	played: list[tuple[float, float]] = []
+
+	def level(t: float) -> float:
+		return 0.06 * (0.3 + abs(((t * 7) % 2) - 1)) if 1.0 <= t < 9.0 else 0.0
+
+	events = sorted([(i * 0.02, "out") for i in range(600)] + [(i * 0.032, "mic") for i in range(375)])
+	missed = leaked = idle_blocked = 0
+	for t, kind in events:
+		if kind == "out":
+			gate.played(t, level(t))
+			played.append((t, level(t)))
+			continue
+		src = max((r for w, r in played if abs(w - (t - true_lag)) <= 0.03), default=0.0)
+		rms = src * true_gain * rng.uniform(0.6, 1.6) + rng.uniform(0.002, 0.006)
+		talking = 5.0 <= t < 6.0
+		if talking:
+			rms += 0.12
+		echo = gate.heard(t, rms)
+		if 2.0 <= t < 9.0:
+			if talking and echo:
+				missed += 1
+			if not talking and not echo:
+				leaked += 1
+		elif t < 1.0 and echo:
+			idle_blocked += 1
+	ok = check("nothing of the robot's own voice gets through", leaked == 0, f"{leaked} frames leaked")
+	ok &= check("a person talking over it is still heard", missed <= 2, f"{missed} frames missed")
+	ok &= check("the room is learned from wrong priors", abs(gate.lag - true_lag) < 0.02 and 0.15 < gate.gain < 0.45
+	            and gate.fits >= 2, str(gate.state()))
+	ok &= check("with nothing playing the microphone is heard raw", idle_blocked == 0)
+	ok &= check("the quiet room's level is learned while idle", 0.002 < gate.floor < 0.007, str(gate.floor))
+	ok &= check("the echo is over once the tail has rung out", not gate.active(9.0 + 0.13 + 0.3 + 0.1)
+	            and gate.active(9.0 + 0.13 + 0.1))
 	return ok
 
 
@@ -158,8 +225,24 @@ def test_transcripts() -> bool:
 	ok &= check("drops Whisper's Chinese silence fillers",
 	            usable_transcript("谢谢观看。") is None and usable_transcript("字幕由Amara.org社群提供") is None
 	            and usable_transcript("请不吝点赞 订阅 转发 打赏支持明镜与点点栏目") is None)
-	ok &= check("tool names become words", spoken_tool("fs_read") == "file read"
-	            and spoken_tool("get_today_date") == "get today's date" and spoken_tool("substract") == "subtract")
+	ok &= check("a phrase repeated to fill the budget is not a turn",
+	            usable_transcript("一位开发者,一位开发者,一位开发者,一位开发者,一位开发者,一") is None
+	            and usable_transcript("no no no no no no") is None
+	            and usable_transcript("一位开发者在和编程中,一位开发者在和编程中,一位开发者,一位开发者,一位开发者,一位开发者,一") is None
+	            and usable_transcript("yes, yes, yes, it worked") == "yes, yes, yes, it worked"
+	            and usable_transcript("Thank you, thank you, thank you.") is None
+	            and usable_transcript("no, run it again") == "no, run it again"
+	            and usable_transcript("测试测试，可以听到吗") == "测试测试，可以听到吗")
+	primer = ("A developer talking to a coding agent about files, tests, git, Python, and the shell. "
+	          "一位开发者在和编程助手讨论文件、测试、git、Python 和终端命令。")
+	ok &= check("Whisper reading its own primer back is not a turn",
+	            usable_transcript("一位开发者在和编程中,一位开发者在和编程中,一位开发者在一起。", primer) is None
+	            and usable_transcript("A developer talking to a coding agent.", primer) is None
+	            and usable_transcript("run the tests, git commit, and ping me", primer) == "run the tests, git commit, and ping me"
+	            and usable_transcript("帮我看一下测试文件", primer) == "帮我看一下测试文件"
+	            and usable_transcript("一位开发者在和编程中", "") == "一位开发者在和编程中")
+	ok &= check("tool names fall into families", tool_family("fs_read") == "files" and tool_family("web_fetch") == "web"
+	            and tool_family("shell_run") == "shell" and tool_family("done") == "")
 	ok &= check("the trace's tool line is recognised, other trace lines are not",
 	            TOOL_LINE.match("  [fs_read]") and not TOOL_LINE.match("[LOG] step 1/120")
 	            and not TOOL_LINE.match("tool calling: fs_read"))
@@ -191,6 +274,14 @@ def test_speech_text() -> bool:
 	ok &= check("drops reasoning and model delimiters",
 	            speech_text("<think>private draft</think><|im_start|>All done.<|im_end|>") == "All done.")
 	ok &= check("control characters do not reach speech", speech_text("\x1b[31mHello\x1b[0m\x00 &amp; goodbye.") == "Hello & goodbye.")
+	# The laughs. Written any way a model writes them, they are performed by the
+	# synthesizer, and never again.
+	ok &= check("written laughter never reaches the synthesizer",
+	            speech_text("Haha, sure. That works, hahaha! lol. Ahahaha. Bahaha no. 哈哈哈哈，行。呵呵。 wwww ok")
+	            == "sure. That works, no. 行。 ok", repr(speech_text("Haha, sure. That works, hahaha! lol. Ahahaha. Bahaha no. 哈哈哈哈，行。呵呵。 wwww ok")))
+	ok &= check("words that merely contain a laugh survive",
+	            speech_text("Shah met Hahn in the Bahamas for a haiku, hehe.") == "Shah met Hahn in the Bahamas for a haiku,")
+	ok &= check("emoji are not read out", speech_text("Done 😄🤖 and dusted ✅.") == "Done and dusted .")
 	answer = "All tests passed. I updated the file. You can try it now."
 	ok &= check("short answers keep their prosodic context", speech_utterances(answer) == [answer])
 	long = "This is a longer answer. " * 50
@@ -276,12 +367,65 @@ def test_timeouts() -> bool:
 	return ok
 
 
+def test_preamble() -> bool:
+	"""The side call: one tool-less request, and only a sentence worth saying comes back."""
+	import os
+	import time
+
+	class Provider:
+		def __init__(self, reply):
+			self.reply, self.calls = reply, []
+
+		def generate(self, messages, model, tools, **kw):
+			self.calls.append({"messages": messages, "model": model, "tools": tools, **kw})
+			return type("Turn", (), {"text": self.reply})()
+
+	history = [{"role": "system", "content": "s"}, {"role": "user", "content": "hi"},
+	           {"type": "function_call", "call_id": "c", "name": "done", "arguments": "{}"},
+	           {"type": "function_call_output", "call_id": "c", "output": "hey"},
+	           {"role": "assistant", "content": "hey"}]
+	pv = Provider(" \"Let me see what's out this week.\" ")
+	line = bridge.ask_preamble(pv, "m", history, "what's in theaters?")
+	ok = check("a sentence comes back bare", line == "Let me see what's out this week.", repr(line))
+	call = pv.calls[0]
+	ok &= check("no tools, no stream, a short timeout", call["tools"] is None and call["stream"] is False
+	            and call["timeout"] <= 30 and call["model"] == "m")
+	ok &= check("it sees the character, the clock, the recent talk and the prompt",
+	            call["messages"][0]["role"] == "system" and "CHARACTER" in call["messages"][0]["content"]
+	            and "Right now it is" in call["messages"][0]["content"]
+	            and [m["content"] for m in call["messages"][1:]] == ["hi", "hey", "what's in theaters?"]
+	            and not any(m.get("type") for m in call["messages"]), str(call["messages"])[:300])
+	ok &= check("the prompt tells it when to say nothing, and never to laugh",
+	            "NONE" in bridge.PREAMBLE_PROMPT and "no laughter" in bridge.PREAMBLE_PROMPT)
+	ok &= check("NONE, blank and an essay are all silence",
+	            bridge.ask_preamble(Provider("NONE"), "m", None, "hi") is None
+	            and bridge.ask_preamble(Provider("none."), "m", None, "hi") is None
+	            and bridge.ask_preamble(Provider("  "), "m", None, "hi") is None
+	            and bridge.ask_preamble(Provider("word " * 80), "m", None, "hi") is None)
+
+	saved = os.environ.get("TZ")
+	try:
+		bridge.set_clock("Asia/Tokyo")
+		tokyo = time.strftime("%Z")
+		bridge.set_clock("not a zone")
+		ok &= check("the clock takes a named zone and ignores junk", os.environ["TZ"] == "Asia/Tokyo"
+		            and tokyo == "JST", tokyo)
+	finally:
+		os.environ.pop("TZ", None) if saved is None else os.environ.update({"TZ": saved})
+		time.tzset()
+	return ok
+
+
 def test_bridge() -> bool:
+	import threading
+
 	calls = []
+	release = threading.Event()  # the preamble answers only when the test lets it
 
 	def fake_loop(prompt, runtime, history=None, system_prompt="", verbose=True, **_):
 		calls.append({"prompt": prompt, "history": history, "system_prompt": system_prompt, "verbose": verbose})
-		log("  [fs_read]")
+		if "chat" not in prompt:
+			log("  [fs_read]")
 		log("[LOG] step 1/120 (3 items in context)")
 		log("  [done]")
 		if "boom" in prompt:
@@ -294,50 +438,94 @@ def test_bridge() -> bool:
 		]
 		return AgentRun(msgs, "done", 2)
 
+	asked = []
+
+	def fake_preamble(history, prompt):
+		asked.append(prompt)
+		if "six" in prompt:
+			return "Let me work that out."   # said while the turn runs
+		if "again" in prompt:
+			release.wait(2)                   # arrives after the answer: too late to say
+			return "Hang on."
+		if "chat" in prompt:
+			return "Nothing much, you?"        # a small model answering instead of NONE
+		return None                           # small talk: nothing to say
+
+	def slow_loop(prompt, runtime, **kw):
+		if "six" in prompt:
+			import time
+			time.sleep(0.1)  # the preamble lands first
+		return fake_loop(prompt, runtime, **kw)
+
 	saved = bridge.agent_loop, sys.stdout, sys.stderr
 	out, err = io.StringIO(), io.StringIO()
-	bridge.agent_loop, sys.stdout, sys.stderr = fake_loop, out, bridge.ToolTap(err)
+	bridge.agent_loop, sys.stdout, sys.stderr = slow_loop, out, bridge.ToolTap(err)
 	try:
 		bridge.serve(io.StringIO(
+			'{"type": "clock", "tz": "UTC"}\n'
 			'{"type": "prompt", "text": "what is six times seven"}\n'
 			'not json\n'
 			'{"type": "heard", "text": "forty"}\n'
 			'{"type": "prompt", "text": "say it again"}\n'
 			'{"type": "prompt", "text": "boom"}\n'
-			'{"type": "prompt", "text": "   "}\n'), runtime=None)
+			'{"type": "prompt", "text": "   "}\n'
+			'{"type": "prompt", "text": "just chat"}\n'), runtime=None, preamble=fake_preamble)
 	finally:
+		release.set()
 		bridge.agent_loop, sys.stdout, sys.stderr = saved
 
 	events = [json.loads(line) for line in out.getvalue().splitlines()]
 	kinds = [e["type"] for e in events]
-	ok = check("a tool event per tool line, none for done, a trace and an answer per prompt, "
-	           "an error for junk",
-	           kinds == ["tool", "trace", "answer", "error", "tool", "trace", "answer",
-	                     "tool", "trace", "answer"], str(kinds))
-	ok &= check("tool events name the tool", events[0] == {"type": "tool", "name": "fs_read"}, str(events[0]))
+	ok = check("a preamble when there is one, a tool event per tool line, none for done, a trace "
+	           "and an answer per prompt, an error for junk, and a late preamble is never emitted",
+	           kinds == ["preamble", "tool", "trace", "answer", "error", "tool", "trace", "answer",
+	                     "tool", "trace", "answer", "trace", "answer"], str(kinds))
+	ok &= check("the preamble is asked for every turn", len(asked) == 4, str(asked))
+	ok &= check("a turn that never calls a tool never gets one, whatever the side call said",
+	            events[-2]["preamble"] is None and events[-2]["turn"] == 4, str(events[-2])[:200])
+	now = [100.0]
+	gate = bridge.Preamble(fresh_s=6.0, clock=lambda: now[0])
+	gate.tool()
+	now[0] = 130.0
+	gate.offer("Let me look.")
+	ok &= check("a preamble that took thirty seconds to arrive is stale, not spoken", gate.said is None)
+	gate = bridge.Preamble(fresh_s=6.0, clock=lambda: now[0])
+	now[0] = 131.0
+	gate.offer("Let me look.")
+	gate.tool()
+	ok &= check("a fresh one waits for the tool and is then said once", gate.said == "Let me look.")
+	ok &= check("tool events name the tool", events[1] == {"type": "tool", "name": "fs_read"}, str(events[1]))
+	ok &= check("the preamble is the model's line", events[0] == {"type": "preamble", "text": "Let me work that out."})
 	answers = [e for e in events if e["type"] == "answer"]
 	traces = [e for e in events if e["type"] == "trace"]
 	ok &= check("the answer is what done returned", answers[0]["text"] == "forty two" and answers[0]["ok"]
 	            and answers[0]["stop_reason"] == "done" and answers[0]["steps"] == 2, str(answers[0]))
 	ok &= check("each turn is traced before its answer, with what the loop added to the history",
-	            [t["turn"] for t in traces] == [1, 2, 3] and traces[0]["prompt"].endswith("six times seven")
-	            and len(traces[0]["messages"]) == 4 and traces[0]["ok"], str(traces[0])[:200])
+	            [t["turn"] for t in traces] == [1, 2, 3, 4] and traces[0]["prompt"].endswith("six times seven")
+	            and len(traces[0]["messages"]) == 5 and traces[0]["ok"], str(traces[0])[:200])
 	ok &= check("a crashed turn is traced too, with no messages and the error on it",
-	            traces[-1]["messages"] == [] and traces[-1]["ok"] is False
-	            and "provider down" in traces[-1]["error"], str(traces[-1])[:200])
+	            traces[2]["messages"] == [] and traces[2]["ok"] is False
+	            and "provider down" in traces[2]["error"], str(traces[2])[:200])
 	ok &= check("the trace still reaches stderr", "[fs_read]" in err.getvalue() and "[LOG] step" in err.getvalue())
 	ok &= check("voice rules ride on the system prompt, and the loop is quiet",
 	            "Voice mode" in calls[0]["system_prompt"] and calls[0]["verbose"] is False)
 	ok &= check("the second turn carries the first turn's history",
 	            calls[1]["history"] is not None and calls[1]["history"][-1]["content"] == "forty two")
+	spoken = [m for m in calls[1]["history"] if m.get("role") == "assistant"]
+	ok &= check("what the preamble said is in that history, right after the user's words",
+	            spoken[0]["content"] == "Let me work that out."
+	            and calls[1]["history"][calls[1]["history"].index(spoken[0]) - 1]["role"] == "user"
+	            and traces[0]["preamble"] == "Let me work that out.", str(calls[1]["history"])[:300])
+	ok &= check("and a preamble that was never said is not", traces[1]["preamble"] is None
+	            and not any(m.get("content") == "Hang on." for m in calls[2]["history"]))
 	ok &= check("an interruption is told to the model with what was heard",
 	            calls[1]["prompt"].startswith("(You were interrupted") and '"forty"' in calls[1]["prompt"]
 	            and calls[1]["prompt"].endswith("say it again"), calls[1]["prompt"])
 	ok &= check("and only once", not calls[2]["prompt"].startswith("("))
-	ok &= check("a crash is an answer with ok false", answers[-1]["ok"] is False
-	            and "provider down" in answers[-1]["text"] and answers[-1]["stop_reason"] == "error",
-	            str(answers[-1]))
-	ok &= check("a blank prompt is ignored", len(calls) == 3)
+	ok &= check("a crash is an answer with ok false", answers[2]["ok"] is False
+	            and "provider down" in answers[2]["text"] and answers[2]["stop_reason"] == "error",
+	            str(answers[2]))
+	ok &= check("a blank prompt is ignored", len(calls) == 4)
 	return ok
 
 
@@ -387,8 +575,9 @@ def test_runlog() -> bool:
 
 
 def main() -> int:
-	results = [test_endpointer(), test_bargein(), test_narrator(), test_heard(), test_transcripts(),
-	           test_sentences(), test_speech_text(), test_timeouts(), test_bridge(), test_runlog()]
+	results = [test_endpointer(), test_bargein(), test_narrator(), test_echo_gate(), test_heard(), test_transcripts(),
+	           test_sentences(), test_speech_text(), test_timeouts(), test_preamble(), test_bridge(),
+	           test_runlog()]
 	print("\nvoice:", "all passed" if all(results) else "FAILURES")
 	return 0 if all(results) else 1
 

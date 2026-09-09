@@ -31,11 +31,16 @@ STT_MODEL = "large-v3-turbo"
 TTS_MODEL = "qwen3-tts"
 STT_RATE = 16_000
 TTS_RATE = 24_000
+# The delivery. The timbre is voice/robot.py's job; this is what the synthesizer is told
+# about how to read, and it is the same for a cached filler and a live answer.
 DEFAULT_INSTRUCTIONS = (
-	"Speak in a calm, matter-of-fact conversational voice. Use a steady midrange pitch, "
-	"even volume and a moderate pace throughout. Keep emotion restrained. "
-	"Read only the supplied words, without laughter, chuckles or added vocal sounds."
+	"You are the voice of a small, cheerful male robot, like a friendly toy robot in a film: "
+	"bright, quick, expressive and a little bouncy, with lively pitch movement and crisp "
+	"consonants. Sound curious and warm, never sleepy and never sarcastic. "
+	"Read only the supplied words exactly as written. Never laugh, giggle, chuckle, snort, "
+	"sigh or add any vocal sound that is not a word."
 )
+DEFAULT_VOICE = "aiden"  # a bright male preset; the robot is built on top of it
 TTS_LANGUAGES = {
 	"en": "English", "zh": "Chinese", "ja": "Japanese", "ko": "Korean",
 	"de": "German", "fr": "French", "ru": "Russian", "pt": "Portuguese",

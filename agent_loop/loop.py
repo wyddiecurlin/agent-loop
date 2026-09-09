@@ -9,6 +9,7 @@ All narration goes to stderr. stdout belongs to the result JSON (see __main__.py
 import json
 import sys
 from collections import Counter
+from datetime import datetime
 from dataclasses import asdict, dataclass
 from typing import Iterable, Literal
 
@@ -148,9 +149,29 @@ STALL_NUDGE = (
 )
 
 
+PERSONA = '''
+	CHARACTER:
+	You are a small, capable robot named Mimo with a big personality: playful, curious, quick, and
+	completely straight with people.
+	- Honest and pragmatic. Say what is true, what you found, and what you could not do.
+	  No hedging, no padding, no bullshit.
+	- Zero flattery. Never praise the user's question, idea or taste ("great question",
+	  "what a cool idea"), never gush. If something is good, say why in one plain clause;
+	  if it is not, say so, kindly.
+	- Dry humor, lightly and rarely, never at the user's expense and never in place of an
+	  answer. Skip the jokes when the person is stressed or in a hurry.
+	- Talk like an old friend who happens to be good at this: relaxed, direct, familiar,
+	  respectful. Contractions, plain words, no corporate tone, no lectures.
+	- No exclamation-mark enthusiasm, no emoji, no written laughter (haha, lol, 哈哈) and
+	  no stage directions.
+	- Short by default: the answer first, the reasons after, and only the ones that matter.
+'''
+
 SYSTEM_PROMPT = '''
 	You are an agent that completes tasks by invoking tools according to user's requests.
+''' + PERSONA + '''
 	RULES:
+	- Use web search and fetch for user's reqeusts relating to recent news, movies, etc
 	- Every turn must call at least one tool; there is no way to reply with plain text.
 	- If you announce that you are going to call a tool, call it in the same turn.
 	- The task ends only when you call `done`, so call it as soon as you have what you need.
@@ -161,6 +182,21 @@ SYSTEM_PROMPT = '''
 	- `answer` must stand on its own: if the task requires modifying outside state or files,
 		state what you have done. Otherwise, state the answer concisely. 
 '''
+
+
+def stamp(system_prompt: str, now: datetime | None = None) -> str:
+	"""`system_prompt` with the current date and time on the end.
+
+	There is no clock tool: the model reads the time here, and the system message is
+	rebuilt with a fresh stamp at the start of every agent_loop call, so a conversation
+	that lasts an hour does not keep believing it is still the first minute. The zone is
+	named because the container's clock is UTC unless TZ is set (run.sh passes .env
+	through; voice/bridge.py takes the host's zone from the client).
+	"""
+	now = now or datetime.now().astimezone()
+	when = f"{now:%A}, {now.day} {now:%B} {now.year}, {now.hour:02d}:{now.minute:02d} ({now.tzname() or 'UTC'})"
+	return (f"{system_prompt.rstrip()}\n\tRight now it is {when}. Use this for anything that "
+	        f"depends on the date or the time.\n")
 
 
 def agent_loop(
@@ -186,7 +222,10 @@ def agent_loop(
 	trace = log if verbose else (lambda *_: None)
 	on_tool_call = stream_tool_calls if verbose else (lambda t, kind: kind == "function_call" and log(f"  [{t}]"))
 	registry = build_registry(runtime, allow=tools)
-	messages: list[InputItem] = list(history) if history else [Message(role='system', content=system_prompt)]
+	system = Message(role='system', content=stamp(system_prompt))
+	messages: list[InputItem] = list(history) if history else [system]
+	if history and messages[0].get("role") == "system":
+		messages[0] = system  # the clock moved on since the conversation started
 	messages.append(Message(role='user', content=prompt))
 
 	stalled = 0

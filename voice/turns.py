@@ -14,6 +14,7 @@ and a cut-off answer into what the user actually heard.
 from __future__ import annotations
 
 import html
+import random
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -145,71 +146,72 @@ class Endpointer:
 class BargeInConfig:
 	prob: float = 0.6          # stricter than start_prob: a little of our own voice leaks back in
 	sustain_ms: int = 250      # this long before we stop talking; a cough does not cut us off
+	gap_ms: int = 0            # optional total unvoiced time within the evidence window
 
 
 class BargeIn:
 	def __init__(self, cfg: BargeInConfig | None = None):
 		self.cfg = cfg or BargeInConfig()
 		self.run = 0
+		self.recent: list[bool] = []
 
 	def feed(self, p: float, playing: bool) -> bool:
-		if not playing or p < self.cfg.prob:
+		if not playing or (self.cfg.gap_ms <= 0 and p < self.cfg.prob):
 			self.run = 0
+			self.recent.clear()
 			return False
-		self.run += 1
-		if self.run < frames(self.cfg.sustain_ms):
+		required = frames(self.cfg.sustain_ms)
+		gaps = frames(self.cfg.gap_ms) if self.cfg.gap_ms > 0 else 0
+		self.recent.append(p >= self.cfg.prob)
+		del self.recent[:max(0, len(self.recent) - required - gaps)]
+		self.run = sum(self.recent)
+		if self.run < required:
 			return False
 		self.run = 0
+		self.recent.clear()
 		return True
 
 
 # --- what to say while the agent works ---------------------------------------------------
 
-# The short lines spoken while the agent works. Only English and Chinese are written out;
-# any other spoken language falls back to the English ones.
+# What the client can say on its own while the agent is busy. Only English and Chinese are
+# written out; any other spoken language falls back to the English ones.
+#
+#   fillers   one is spoken shortly after the user's turn if nothing else has been said
+#             yet: the sound a person makes while they take the question in, not a
+#             sentence. "" is a deliberate silence, so it is not "um" every single time.
+#   hold      spoken when the agent has been quiet for a while after the last thing the
+#             user heard. Keyed by the family of the last tool that ran, so the line
+#             fits what is actually taking the time, and phrased as a "hold on", not as
+#             an announcement of machinery.
+#
+# What the agent is about to *do* is never a fixed line: voice/bridge.py asks the model
+# for that in parallel with the real turn (the "preamble"), and the client speaks it live.
 STATUS_LINES = {
 	"en": {
-		"ack": "Let me check.",
-		"reassure": "I'm still working on that.",
-		"fs_list": "I'm checking the files.",
-		"fs_read": "I'm reading the file.",
-		"fs_search": "I'm searching the files.",
-		"fs_write": "I'm writing the file.",
-		"fs_patch": "I'm updating the file.",
-		"shell_run": "I'm running the command.",
-		"web_search": "I'm searching the web.",
-		"web_fetch": "I'm reading the page.",
-		"multiply": "I'm checking the calculation.",
-		"substract": "I'm checking the calculation.",
-		"get_today_date": "I'm checking the date.",
+		"fillers": ("Uh,", "Um,", "Hmm.", "Mm,", ""),
+		"hold": {
+			"web": "Still digging through the web, hold on a sec.",
+			"files": "Still going through the files, one sec.",
+			"shell": "Still running that, hang on.",
+			"": "Still on it, hold on.",
+		},
 	},
 	"zh": {
-		"ack": "我看一下。",
-		"reassure": "还在处理，请稍等。",
-		"fs_list": "我在看有哪些文件。",
-		"fs_read": "我在读这个文件。",
-		"fs_search": "我在搜索文件。",
-		"fs_write": "我在写文件。",
-		"fs_patch": "我在修改文件。",
-		"shell_run": "我在执行命令。",
-		"web_search": "我在搜索网页。",
-		"web_fetch": "我在读这个网页。",
-		"multiply": "我在核对计算。",
-		"substract": "我在核对计算。",
-		"get_today_date": "我在查日期。",
+		"fillers": ("呃，", "嗯，", "嗯……", ""),
+		"hold": {
+			"web": "还在网上查，稍等一下。",
+			"files": "还在看文件，稍等。",
+			"shell": "还在跑，等一下。",
+			"": "还在弄，稍等。",
+		},
 	},
 }
 STATUS_LANGUAGES = tuple(STATUS_LINES)
 
 
-def status_line(key: str, language: str = "en") -> str:
-	"""The line for `key` -- a tool name, "ack" or "reassure" -- in `language`.
-
-	An unknown tool is worth acknowledging but not describing, so it falls back to the
-	acknowledgement rather than inventing a sentence about machinery the user cannot see.
-	"""
-	lines = STATUS_LINES.get(language) or STATUS_LINES["en"]
-	return lines.get(key) or lines["ack"]
+def status_lines(language: str = "en") -> dict:
+	return STATUS_LINES.get(language) or STATUS_LINES["en"]
 
 
 def status_language(text: str) -> str:
@@ -217,13 +219,33 @@ def status_language(text: str) -> str:
 	return "zh" if dense_script(text) else "en"
 
 
+def all_status_lines(languages=STATUS_LANGUAGES) -> list[str]:
+	"""Every line worth synthesizing ahead of time, for the clip cache."""
+	out: list[str] = []
+	for lang in languages:
+		lines = status_lines(lang)
+		out.extend(f for f in lines["fillers"] if f)
+		out.extend(lines["hold"].values())
+	return list(dict.fromkeys(out))
+
+
+def tool_family(name: str) -> str:
+	"""`web_fetch` -> "web", `fs_read` -> "files", `shell_run` -> "shell", else ""."""
+	if name.startswith("web_"):
+		return "web"
+	if name.startswith("fs_"):
+		return "files"
+	if name.startswith("shell_"):
+		return "shell"
+	return ""
+
+
 # Not a status line but the same idea: what to say in place of an answer nobody wants read
 # to them. Kept out of STATUS_LINES because it is spoken through the answer stream, not
 # prefetched as a status clip.
 TOO_LONG = {
-	"en": "That answer is a bit long to read out loud. It is on screen in full. "
-	      "Have a look, and ask me about any of it.",
-	"zh": "这个回答有点长，我就不念了。完整内容在屏幕上，你看一下，有什么问题随时问我。",
+	"en": "That one's too long to read out. It's all on the screen, have a look and ask me about any of it.",
+	"zh": "这个太长了，我就不念了。完整内容在屏幕上，你看一下，有什么问题随时问我。",
 }
 MAX_SPOKEN_S = 40.0
 
@@ -239,78 +261,81 @@ def spoken_answer(text: str, language: str = "en", max_seconds: float = MAX_SPOK
 		TOO_LONG.get(language) or TOO_LONG["en"])
 
 
-SPOKEN_WORDS = {"fs": "file", "substract": "subtract", "today": "today's"}
-
-
-def spoken_tool(name: str) -> str:
-	"""`fs_read` -> "file read", `get_today_date` -> "get today's date"."""
-	return " ".join(SPOKEN_WORDS.get(w, w) for w in name.split("_"))
-
-
 @dataclass
 class NarratorConfig:
-	ack_after_s: float = 1.2        # quick answers need no acknowledgement or tool line
-	gap_s: float = 6.0              # least time between two spoken lines
-	repeat_tool_after_s: float = 15.0
-	reassure_every_s: float = 15.0
-	max_reassure: int = 2
+	filler_after_s: float = 0.45   # nothing heard this long after the turn -> a filler
+	hold_after_s: float = 7.0      # quiet this long after the last thing heard -> a hold line
+	hold_every_s: float = 15.0     # and then this often
+	max_hold: int = 3
 
 
 class Narrator:
-	"""Picks the short lines spoken while the agent is busy. Time is passed in, never read."""
+	"""Picks the short lines the client says on its own while the agent is busy.
 
-	def __init__(self, cfg: NarratorConfig | None = None, language: str = "en"):
+	Time is passed in, never read. `tick` is told whether anything is being heard right
+	now (a filler, the preamble, the user talking), and counts quiet from the moment that
+	stopped: a hold line is for a silence, not for a wait.
+	"""
+
+	def __init__(self, cfg: NarratorConfig | None = None, language: str = "en", seed: int | None = None):
 		self.cfg = cfg or NarratorConfig()
 		self.language = language  # reassigned per turn when the spoken language is not fixed
+		self.rng = random.Random(seed)
 		self.active = False
 		self.t0 = 0.0
-		self.last_spoken: float | None = None
-		self.pending: str | None = None
-		self.last_tool: str | None = None
-		self.last_tool_at = float("-inf")
-		self.reassured = 0
+		self.last_heard = 0.0     # when the user last heard anything from us this turn
+		self.heard_anything = False
+		self.family = ""          # of the last tool that ran
+		self.holds = 0
 
 	def submitted(self, now: float) -> None:
 		"""The user's turn went to the agent; from here on we owe them signs of life."""
-		self.active, self.t0, self.last_spoken = True, now, None
-		self.pending, self.last_tool, self.last_tool_at, self.reassured = None, None, float("-inf"), 0
+		self.active, self.t0, self.last_heard, self.heard_anything = True, now, now, False
+		self.family, self.holds = "", 0
 
 	def answered(self) -> None:
-		self.active, self.pending = False, None
+		self.active = False
 
 	def tool(self, name: str, now: float) -> None:
-		if not self.active:
-			return
-		if name == self.last_tool and now - self.last_tool_at < self.cfg.repeat_tool_after_s:
-			return
-		self.pending = name
+		if self.active:
+			self.family = tool_family(name)
+
+	def said(self, now: float) -> None:
+		"""Something else was spoken to the user (the preamble): no filler is owed now."""
+		self.heard_anything, self.last_heard = True, now
 
 	def tick(self, now: float, speaking: bool) -> str | None:
-		if not self.active or speaking:
+		if not self.active:
 			return None
-		c = self.cfg
-		quiet_for = now - (self.t0 if self.last_spoken is None else self.last_spoken)
-		if self.last_spoken is None and quiet_for < c.ack_after_s:
+		if speaking:
+			self.last_heard = now
 			return None
-		if self.pending is not None and (self.last_spoken is None or quiet_for >= c.gap_s):
-			name, self.pending = self.pending, None
-			self.last_tool, self.last_tool_at, self.last_spoken = name, now, now
-			return status_line(name, self.language)
-		if self.last_spoken is None:
-			if quiet_for < c.ack_after_s:
+		lines = status_lines(self.language)
+		if not self.heard_anything:
+			if now - self.t0 < self.cfg.filler_after_s:
 				return None
-			self.last_spoken = now
-			return status_line("ack", self.language)
-		if quiet_for >= c.reassure_every_s and self.reassured < c.max_reassure:
-			self.reassured += 1
-			self.last_spoken = now
-			return status_line("reassure", self.language)
+			self.heard_anything, self.last_heard = True, now
+			return self.rng.choice(lines["fillers"]) or None
+		if now - self.last_heard >= (self.cfg.hold_after_s if self.holds == 0 else self.cfg.hold_every_s) \
+		   and self.holds < self.cfg.max_hold:
+			self.holds += 1
+			self.last_heard = now
+			return lines["hold"].get(self.family) or lines["hold"][""]
 		return None
 
 
 # --- from an answer to utterances ----------------------------------------------------------
 
 SENTENCE_BREAK = re.compile(r"(?<=[.!?…])\s+(?=\S)|\n+")
+
+# Written laughter, in any of the ways a model types it. The synthesizer performs these,
+# and what it performs is not funny: it is the one sound the user asked never to hear
+# again. Stripped before synthesis whatever the system prompt said.
+LAUGHTER = re.compile(
+	r"(?i)(?<![A-Za-z])(?:(?:b|bw|mw|a)?a?h?(?:ha|he|hi|ho){2,}h?|lo+l|lmao|rofl|teehee|tehe)"
+	r"(?![A-Za-z])[.!,。！，]?|[哈嘿呵嘻]{2,}[。！，]?|(?<![A-Za-z])w{3,}(?![A-Za-z])")
+# Emoji and pictographs: read out as their names, or as a giggle, depending on the day.
+EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D]")
 
 
 def split_sentences(text: str) -> list[str]:
@@ -347,6 +372,9 @@ def speech_text(text: str) -> str:
 	text = re.sub(r"(?im)^[ \t]*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)", "", text)
 	text = re.sub(r"(?i)(?:\[|\(|\*{1,2})\s*(?:laughs?|laughing|chuckles?|chuckling|"
 	              r"giggles?|giggling|sighs?|sighing|gasps?|gasping)\s*(?:\]|\)|\*{1,2})", "", text)
+	text = LAUGHTER.sub("", text)
+	text = EMOJI.sub("", text)
+	text = re.sub(r"(^|[.!?…\n]\s*)[,，、]\s*", r"\1", text)  # the comma "haha," left behind
 	text = re.sub(r"`+([^`]+)`+", r"\1", text)
 	text = re.sub(r"(?<!\w)(\*{1,3}|_{1,2}|~~)(\S(?:.*?\S)?)\1(?!\w)", r"\2", text)
 	text = "".join(c for c in text if not unicodedata.category(c).startswith("C") or c.isspace())
@@ -439,10 +467,54 @@ HALLUCINATIONS = {"you", "thank you", "thanks", "thank you for watching", "thank
 CREDITS = re.compile(r"amara|字幕|訂閱|订阅|打赏|打賞|点赞|點贊|明镜|明鏡|转发|轉發", re.I)
 
 
-def usable_transcript(text: str) -> str | None:
+def repeated_phrase(text: str) -> bool:
+	"""Whisper's other habit on near-silence: a short phrase, often lifted from its own
+	primer prompt, repeated until the token budget runs out ("一位开发者," forty times,
+	the last one cut off). Three or more repeats making up most of the turn."""
+	body = re.sub(r"[\s,，、.。!！?？;；:：]+", "", text.lower())
+	for n in range(1, min(40, len(body) // 3) + 1):
+		unit, reps = body[:n], 0
+		while body.startswith(unit, reps * n):
+			reps += 1
+		if reps >= 3 and reps * n >= len(body) * 0.8:
+			return True
+	# The run-in can differ from the loop ("一位开发者在和编程中, 一位开发者, 一位开发者, ...")
+	# so also ask whether one short segment makes up most of the turn's segments.
+	segments = [seg.strip() for seg in re.split(r"[,，、.。!！?？;；]+", text.lower()) if seg.strip()]
+	if len(segments) >= 4:
+		top = max(set(segments), key=segments.count)
+		echoed = sum(len(seg) for seg in segments if top in seg)
+		if segments.count(top) >= 3 and echoed >= sum(map(len, segments)) * 0.6:
+			return True
+	return False
+
+
+def echoes_primer(text: str, primer: str) -> bool:
+	"""Whisper is primed with a sentence in the user's vocabulary, and on near-silence it
+	reads that sentence back, more or less ("一位开发者在和编程中"). Any run of six
+	characters of a syllabic primer, or four words in a row of a Latin one, is the tell."""
+	if not primer:
+		return False
+	low = text.lower()
+	for sentence in re.split(r"[.。!！?？\n]", primer.lower()):
+		sentence = sentence.strip()
+		if dense_script(sentence):
+			body = re.sub(r"[\s,，、:：;；]+", "", sentence)
+			if any(body[i:i + 6] in low for i in range(len(body) - 5)):
+				return True
+		else:
+			words = re.findall(r"[a-z0-9']+", sentence)
+			hay = re.sub(r"[^a-z0-9' ]+", " ", low)
+			if any(" ".join(words[i:i + 4]) in hay for i in range(len(words) - 3)):
+				return True
+	return False
+
+
+def usable_transcript(text: str, primer: str = "") -> str | None:
 	text = re.sub(r"[\[\(][^\]\)]*[\]\)]", "", text or "").strip()
 	bare = re.sub(r"[^\w\s']", "", text.lower()).strip()
-	if not bare or bare in HALLUCINATIONS or CREDITS.search(bare):
+	if (not bare or bare in HALLUCINATIONS or CREDITS.search(bare) or repeated_phrase(text)
+	    or echoes_primer(text, primer)):
 		return None
 	return text
 

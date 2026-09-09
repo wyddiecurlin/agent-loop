@@ -20,8 +20,14 @@ container, started through ./run.sh with voice/bridge.py as the entrypoint, and 
 process talks to it over stdin/stdout.
 
 	mic -> Silero VAD -> end of turn -> Whisper -> bridge -> agent_loop
-	                                                 \\-> [tool] events -> "I'm reading the file."
-	answer -> Qwen3-TTS websocket -> speaker, cut the moment the user talks over it
+	                                                 \\-> preamble -> "Let me see what's out."
+	answer -> Qwen3-TTS websocket -> robot voice -> speaker, cut the moment the user talks over it
+
+Everything that comes out of the speaker goes through one effect chain (voice/robot.py),
+so the fillers, the preamble and the answer are all the same small robot. Everything that
+comes in through the microphone goes past the echo gate (voice/echo.py), which knows what
+the speaker just played and refuses to hear it again, so laptop speakers work without a
+headset.
 
 Keys: Enter interrupts; a typed line is a turn without the microphone; Ctrl-C quits.
 
@@ -49,14 +55,16 @@ import sounddevice as sd
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+from voice.echo import EchoGate  # noqa: E402
 from voice.log import RunLog  # noqa: E402
+from voice.robot import RobotVoice  # noqa: E402
 from voice.speech import (  # noqa: E402
-	DEFAULT_API, DEFAULT_INSTRUCTIONS, STT, TTS, TTS_RATE, Clips, ensure_silero, stt_language,
-	tts_language,
+	DEFAULT_API, DEFAULT_INSTRUCTIONS, DEFAULT_VOICE, STT, TTS, TTS_RATE, Clips, ensure_silero,
+	stt_language, tts_language,
 )
 from voice.turns import (  # noqa: E402
-	MAX_SPOKEN_S, STATUS_LINES, TOOL_LINE, BargeIn, EndpointConfig, Endpointer, Narrator,
-	heard_text, spoken_answer, status_language, usable_transcript,
+	MAX_SPOKEN_S, STATUS_LANGUAGES, TOOL_LINE, BargeIn, EndpointConfig, Endpointer, Narrator,
+	all_status_lines, frames, heard_text, spoken_answer, status_language, usable_transcript,
 )
 from voice.vad import FRAME, SAMPLE_RATE, SileroVAD  # noqa: E402
 
@@ -95,6 +103,33 @@ def pcm16(frames: list[np.ndarray]) -> bytes:
 	return (np.clip(np.concatenate(frames), -1, 1) * 32767).astype("<i2").tobytes()
 
 
+def boot_chirp(rate: int = TTS_RATE) -> bytes:
+	"""Two rising notes and a blip: the robot waking up. Also the first thing the echo gate
+	hears played, so the room's delay and gain are known before anyone speaks."""
+	def tone(f0: float, f1: float, seconds: float, level: float = 0.35) -> np.ndarray:
+		t = np.arange(int(rate * seconds)) / rate
+		phase = 2 * np.pi * (f0 * t + (f1 - f0) * t * t / (2 * seconds))
+		env = np.minimum(1, np.minimum(t / 0.02, (seconds - t) / 0.06))
+		return (np.sin(phase) + 0.25 * np.sin(2 * phase)) * env * level
+
+	gap = np.zeros(int(rate * 0.06))
+	wave = np.concatenate([tone(620, 900, 0.16), gap, tone(900, 1240, 0.16), gap, tone(1500, 1500, 0.09, 0.28)])
+	return (np.clip(wave, -1, 1) * 32767).astype("<i2").tobytes()
+
+
+def host_timezone() -> str:
+	"""The zone this machine keeps, as a name the container can set TZ to."""
+	tz = os.environ.get("TZ", "")
+	if not tz:
+		try:
+			target = os.readlink("/etc/localtime")  # macOS: .../zoneinfo/America/Los_Angeles
+		except OSError:
+			target = ""
+		if "zoneinfo/" in target:
+			tz = target.split("zoneinfo/", 1)[1]
+	return tz or "UTC"
+
+
 # --- audio in and out ---------------------------------------------------------------------
 
 class Mic:
@@ -130,10 +165,18 @@ class Speaker:
 	`enqueued`, `played` and `dropped` count bytes for the life of the process, so a caller
 	can mark where an utterance began (`enqueued`) and later ask how far playback got
 	(`consumed`) before it was cut.
+
+	`fx` is the robot voice: every byte played goes through it, whoever enqueued it, so a
+	cached filler and a live answer have the same character. It keeps the byte count.
+
+	`gate` is told the level of every block as it leaves for the device (and zero when
+	nothing does), so it can recognise the same sound coming back through the microphone.
 	"""
 
-	def __init__(self, device=None):
+	def __init__(self, device=None, fx: RobotVoice | None = None, gate: EchoGate | None = None):
 		self.lock = threading.Lock()
+		self.fx = fx
+		self.gate = gate
 		self.buf = bytearray()
 		self.enqueued = self.played = self.dropped = 0
 		self.last_sound = 0.0
@@ -147,8 +190,12 @@ class Speaker:
 			chunk = bytes(self.buf[:want])
 			del self.buf[:want]
 			self.played += len(chunk)
+		now = time.monotonic()
 		if chunk:
-			self.last_sound = time.monotonic()
+			self.last_sound = now
+		if self.gate is not None:
+			level = float(np.sqrt(np.mean(np.square(np.frombuffer(chunk, "<i2").astype(np.float32) / 32768)))) if chunk else 0.0
+			self.gate.played(now, level)
 		outdata[:len(chunk)] = chunk
 		if len(chunk) < want:
 			outdata[len(chunk):] = bytes(want - len(chunk))
@@ -159,6 +206,8 @@ class Speaker:
 
 	def play(self, pcm: bytes) -> None:
 		with self.lock:
+			if self.fx is not None:
+				pcm = self.fx.process(pcm)
 			self.buf += pcm
 			self.enqueued += len(pcm)
 
@@ -166,6 +215,8 @@ class Speaker:
 		with self.lock:
 			self.dropped += len(self.buf)
 			self.buf.clear()
+			if self.fx is not None:
+				self.fx.reset()  # nothing of the cut utterance rings on into the next
 
 	def busy(self) -> bool:
 		with self.lock:
@@ -235,10 +286,12 @@ class Agent:
 
 
 class Speech:
-	"""One answer on its way out: a thread feeding the TTS stream into the speaker."""
+	"""One thing on its way out of the agent's mouth, live from the TTS stream into the
+	speaker: the answer, or the preamble said while the answer is still being worked out."""
 
-	def __init__(self, tts: TTS, speaker: Speaker, text: str, spoken: str | None = None):
+	def __init__(self, tts: TTS, speaker: Speaker, kind: str, text: str, spoken: str | None = None):
 		self.speaker = speaker
+		self.kind = kind
 		self.cancel = threading.Event()
 		self.sentences: list = []
 		self.start: int | None = None
@@ -251,14 +304,17 @@ class Speech:
 			time.sleep(0.02)
 		self.speaker.stop()
 		if self.cancel.is_set():
-			log("speak.skipped", text=text)
+			log("speak.skipped", what=self.kind, text=text)
 			return
 		self.start = self.speaker.enqueued
-		say(f"{BOLD}agent>{RESET} {text}")  # preserve code and formatting in the text answer
-		if spoken != text:
-			dim("  (too long to read out; it is above in full)")
+		if self.kind == "preamble":
+			dim(f"  {text}")
+		else:
+			say(f"{BOLD}agent>{RESET} {text}")  # preserve code and formatting in the text answer
+			if spoken != text:
+				dim("  (too long to read out; it is above in full)")
 		t0 = time.monotonic()
-		log("speak", text=spoken, truncated=spoken != text)
+		log("speak", what=self.kind, text=spoken, truncated=spoken != text)
 		try:
 			tts.speak(spoken, self.speaker, self.cancel, sentences=self.sentences,
 			          on_sentence=lambda s: log("tts.sentence", after_s=round(time.monotonic() - t0, 3), text=s))
@@ -336,13 +392,19 @@ class Narration:
 def main(argv: list[str] | None = None) -> int:
 	ap = argparse.ArgumentParser(description="talk to the agent")
 	ap.add_argument("--api", default=os.environ.get("VOICE_API", DEFAULT_API))
-	ap.add_argument("--voice", default=os.environ.get("VOICE", "ryan"))
+	ap.add_argument("--voice", default=os.environ.get("VOICE", DEFAULT_VOICE),
+	                help="the preset the robot is built on; see /audio/voices on the gateway")
+	ap.add_argument("--robot", type=float, default=float(os.environ.get("VOICE_ROBOT", "1")),
+	                help="how much robot in the voice, 0 (the plain preset) to 1")
 	ap.add_argument("--lang", default=os.environ.get("VOICE_LANG", "auto"),
 	                help="what you speak, as an ISO code (en, zh, ...); auto detects it each turn")
 	ap.add_argument("--tts-lang", default=None, help="TTS language; defaults to --lang, or explicitly Auto")
 	ap.add_argument("--stt-prompt", default=None, help="words to prime Whisper with, in the language you speak")
 	ap.add_argument("--instructions", default=DEFAULT_INSTRUCTIONS, help="style for both answers and status clips")
-	ap.add_argument("--no-narration", action="store_true", help="speak answers only, without status clips")
+	ap.add_argument("--no-echo-gate", action="store_true",
+	                help="hear the microphone raw while the speaker plays (for a headset, or to debug the gate)")
+	ap.add_argument("--no-narration", action="store_true",
+	                help="no fillers or hold lines from the client; the agent's preamble and answers only")
 	ap.add_argument("--max-answer-s", type=float, default=MAX_SPOKEN_S,
 	                help="answers longer than this are left on screen instead of read out")
 	ap.add_argument("--endpoint-ms", type=int, default=600, help="silence that ends your turn")
@@ -392,15 +454,16 @@ def run(args, ap) -> int:
 	spoken_status = {"English": "en", "Chinese": "zh"}.get(language, None if language == "Auto" else "en")
 
 	vad = SileroVAD(ensure_silero(CACHE))
-	speaker = Speaker(args.speaker)
+	gate = None if args.no_echo_gate else EchoGate()
+	speaker = Speaker(args.speaker, RobotVoice(TTS_RATE, amount=args.robot) if args.robot > 0 else None, gate)
 	clips = Clips(args.api, args.voice, language, CACHE / "clips", args.instructions)
 	if not args.no_narration:
-		wanted = STATUS_LINES if spoken_status is None else {spoken_status: STATUS_LINES[spoken_status]}
-		clips.prefetch(list(dict.fromkeys(l for lines in wanted.values() for l in lines.values())))
+		clips.prefetch(all_status_lines(STATUS_LANGUAGES if spoken_status is None else (spoken_status,)))
 	tts = TTS(args.api, args.voice, language, args.instructions)
 	stt = STT(args.api, args.lang, prompt)
-	log("config", api=args.api, voice=args.voice, tts_language=language, stt_language=heard_lang or "auto",
-	    stt_prompt=prompt, status_language=spoken_status, instructions=args.instructions, cache=str(CACHE))
+	log("config", api=args.api, voice=args.voice, robot=args.robot, echo_gate=gate is not None, tts_language=language,
+	    stt_language=heard_lang or "auto", stt_prompt=prompt, status_language=spoken_status,
+	    instructions=args.instructions, cache=str(CACHE))
 
 	def transcribe(pcm: bytes, uid: str | None) -> str:
 		"""stt.transcribe, timed and logged. Runs on the pool, so only when it was not discarded."""
@@ -429,6 +492,7 @@ def run(args, ap) -> int:
 		if ev.get("type") == "exit":
 			say(f"the agent did not start (exit {ev.get('code')})")
 			return 1
+	agent.send({"type": "clock", "tz": host_timezone()})
 	mic = Mic(args.mic)  # macOS asks for microphone permission here, once per terminal app
 	for kind, dev in (("input", args.mic), ("output", args.speaker)):
 		try:
@@ -438,6 +502,7 @@ def run(args, ap) -> int:
 			log("device", direction=kind, error=str(exc))
 	say(f"listening as {args.voice} (hearing {heard_lang or 'any language'}, speaking {language}). "
 	    "Enter interrupts, a typed line is a turn, Ctrl-C quits.")
+	speaker.play(boot_chirp())  # awake; and the gate's first look at the room
 
 	typed: queue.Queue[str] = queue.Queue()
 	threading.Thread(target=lambda: [typed.put(l) for l in sys.stdin], daemon=True).start()
@@ -450,10 +515,11 @@ def run(args, ap) -> int:
 
 	preroll: deque[np.ndarray] = deque(maxlen=12)  # ~380 ms before the VAD agrees it is speech
 	utterance: list[np.ndarray] | None = None
+	spoken_before_playback: int | None = None  # speech frames the turn had when the robot started talking
 	speculation: tuple[int, Future] | None = None
 	transcriptions: deque[Future] = deque()  # in flight, in order
 	pending: deque[str] = deque()            # turns waiting for the agent to finish the last one
-	to_speak: deque[tuple[str, str]] = deque()
+	to_speak: deque[tuple[str, str, str]] = deque()  # (kind, text, spoken), in order
 	busy = False
 	started_while_playing = barged = False
 	turns = 0
@@ -522,10 +588,22 @@ def run(args, ap) -> int:
 					dim(f"  ⚙ {ev['name']}")
 					log("tool", name=ev["name"], after_s=round(now - submitted_at, 3))
 					narrator.tool(ev["name"], now)
+				elif kind == "preamble":
+					log("preamble", text=ev.get("text"), after_s=round(now - submitted_at, 3), busy=busy)
+					if busy and ev.get("text"):
+						narrator.said(now)
+						narration.mute()  # a filler still queued is beside the point now
+						to_speak.append(("preamble", ev["text"], ev["text"]))
 				elif kind == "answer":
 					busy = False
 					narrator.answered()
 					narration.mute()
+					if gate is not None:
+						log("echo", **gate.state())
+					# A preamble that has not started by now would be said after the answer
+					# it was meant to precede; one already playing is left to finish.
+					while to_speak and to_speak[-1][0] == "preamble":
+						log("preamble.dropped", text=to_speak.pop()[1])
 					text = ev.get("text") or ""
 					log("answer", turn=turns, ok=ev.get("ok"), steps=ev.get("steps"),
 					    stop_reason=ev.get("stop_reason"), wait_s=round(now - submitted_at, 3), text=text)
@@ -535,7 +613,7 @@ def run(args, ap) -> int:
 					# The whole answer is printed either way; only what is said out loud is
 					# cut, and the listener is told where the rest of it is.
 					answer_lang = spoken_status or status_language(text)
-					to_speak.append((text, spoken_answer(text, answer_lang, args.max_answer_s)))
+					to_speak.append(("answer", text, spoken_answer(text, answer_lang, args.max_answer_s)))
 					if pending:
 						submit(pending.popleft())
 				elif kind == "exit":
@@ -555,7 +633,7 @@ def run(args, ap) -> int:
 			while transcriptions and transcriptions[0].done():
 				fut = transcriptions.popleft()
 				try:
-					text = usable_transcript(fut.result())
+					text = usable_transcript(fut.result(), prompt)
 				except Exception as exc:  # noqa: BLE001
 					dim(f"  (transcription failed: {exc})")
 					continue
@@ -570,8 +648,27 @@ def run(args, ap) -> int:
 			except queue.Empty:
 				frame = None
 			if frame is not None:
-				p = vad(frame)
+				is_echo = False
 				playing = speaker.busy()
+				if gate is not None:
+					# Our own voice coming back is silence, whatever the VAD makes of it.
+					level = float(np.sqrt(np.mean(np.square(frame))))
+					is_echo = gate.heard(now, level)
+					if is_echo:
+						# Silence must reach the recurrent VAD and STT buffers too.
+						# Merely overriding p leaves our voice in VAD state, preroll,
+						# and the end-of-turn audio sent to recognition.
+						frame = np.zeros_like(frame)
+						if utterance is not None and spoken_before_playback is None:
+							spoken_before_playback = endpointer.speech_frames
+					playing = playing or gate.active(now)
+				# Remote/device adapters may focus the microphone on nearby speech.
+				# Suppression applies to the VAD state and recognition audio together.
+				if hasattr(mic, "process"):
+					frame, is_echo = mic.process(frame, is_echo=is_echo)
+				p = vad(frame)
+				if is_echo:
+					p = 0.0
 				if barge.feed(p, playing):
 					barged = True
 					interrupt("barge-in")
@@ -584,6 +681,7 @@ def run(args, ap) -> int:
 					narration.mute()
 					utterance = list(preroll) + [frame]
 					started_while_playing, barged, speculation = playing, False, None
+					spoken_before_playback = None
 					utterance_id = LOG.utterance() if LOG else None
 					log("vad.start", utterance=utterance_id, playing=playing, p=round(float(p), 3))
 				elif utterance is not None:
@@ -602,6 +700,13 @@ def run(args, ap) -> int:
 					if started_while_playing and not barged:
 						dim("  (you spoke over me without cutting in: ignored)")
 						log("stt.ignored", utterance=utterance_id, why="spoke over playback without barging in")
+						discard(speculation)
+					elif (spoken_before_playback is not None and not barged
+					      and spoken_before_playback < frames(endpointer.cfg.min_speech_ms)):
+						# It opened on a noise a moment before the robot spoke, and the rest of
+						# what it holds is the robot: Whisper would hand that back as a turn.
+						dim("  (a noise just before I spoke: ignored)")
+						log("stt.ignored", utterance=utterance_id, why="opened just before playback, no speech before it")
 						discard(speculation)
 					elif speculation and speculation[0] == endpointer.speech_frames:
 						transcriptions.append(speculation[1])

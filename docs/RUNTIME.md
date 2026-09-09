@@ -155,9 +155,10 @@ The loop runs where we say **structurally**, not by convention:
 - `setup()` refuses to return a runtime unless `/.dockerenv` exists. Being inside a
   container is checked, not assumed. `AGENT_UNSAFE_HOST=1` overrides it deliberately.
 
-**Only effectful tools are bound.** `substract`, `multiply`, `get_today_date` and
-`done` touch nothing, so there is nothing to contain. The invariant is not "every tool
-runs in the sandbox" but:
+**Only effectful tools are bound.** `done` touches nothing, so there is nothing to
+contain. (The date is not a tool either: `loop.py` stamps the system prompt with the date
+and time at the start of every call, in the container's zone, which is UTC unless `TZ` is
+in `.env`.) The invariant is not "every tool runs in the sandbox" but:
 
 > Every tool that touches the filesystem or spawns a process does so only through the
 > Runtime it was handed.
@@ -202,8 +203,8 @@ Escape cases assert a denial: no host filesystem, model-written commands run as
 - **Debuggability.** No mount means no peeking mid-run. Use `get()` into a temp dir on
   failure, or a second agent in the same box, not a debug-only mount that will rot.
 - **Apple silicon → `linux/arm64`.** Pin `--platform`; prod is probably x86.
-- **`get_today_date` reads the clock**, which is now the container's. Fine, but it is
-  the one unbound tool that would move if runs had to be reproducible.
+- **The system prompt reads the clock**, which is the container's. Fine, but it is the
+  one thing in the prompt that would have to be pinned if runs had to be reproducible.
 - **Never mount `/var/run/docker.sock`.** Full host escape, and it is the reason the
   agent must never try to create its own container.
 

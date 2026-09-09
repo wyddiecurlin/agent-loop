@@ -20,7 +20,10 @@ from websockets.exceptions import ConnectionClosedError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import numpy as np
+
 from voice import client
+from voice.robot import RobotConfig, RobotVoice
 from voice.speech import Clips, DEFAULT_INSTRUCTIONS, STT, TTS, TTS_RATE, stt_language, tts_language
 
 
@@ -261,8 +264,49 @@ class VoiceAudioTests(unittest.TestCase):
         self.assertTrue(ws.closed)
         self.assertTrue(sink.stopped)
 
+    def test_robot_voice_is_one_continuous_stream(self):
+        # The same bytes in 4 KB chunks or all at once: the chain keeps its state across
+        # calls, or every chunk boundary would click. Hiss is random, so it is off here.
+        rate = TTS_RATE
+        t = np.arange(rate * 2) / rate
+        x = (np.sin(2 * np.pi * 220 * t) * 0.3 * (1 + 0.5 * np.sin(2 * np.pi * 3 * t))).astype(np.float32)
+        pcm = (x * 32767).astype("<i2").tobytes()
+        quiet = RobotConfig(hiss=0)
+        whole = RobotVoice(rate, quiet).process(pcm)
+        fx = RobotVoice(rate, quiet)
+        chunked = b"".join(fx.process(pcm[i:i + 4096]) for i in range(0, len(pcm), 4096))
+        self.assertEqual(len(whole), len(pcm))
+        self.assertEqual(whole, chunked)
+        self.assertNotEqual(whole, pcm)
+        # Byte offsets taken by the caller must still mean what they meant.
+        self.assertEqual(len(RobotVoice(rate).process(b"\0\0\0")), 3)
+        # Silence in, silence out: the effect must not hum on its own.
+        silence = np.frombuffer(RobotVoice(rate, quiet).process(b"\0\0" * 2000), "<i2")
+        self.assertEqual(int(np.abs(silence).max()), 0)
+        # The plain voice is a real setting, not a missing feature.
+        self.assertEqual(RobotVoice(rate, amount=0).process(pcm), pcm)
+        # And it is bounded: a loud input never wraps around.
+        loud = (np.sign(x) * 32767).astype("<i2").tobytes()
+        out = np.frombuffer(RobotVoice(rate).process(loud), "<i2")
+        self.assertLessEqual(int(np.abs(out.astype(int)).max()), 32767)
+
+    def test_speaker_plays_everything_through_the_robot(self):
+        speaker = client.Speaker.__new__(client.Speaker)
+        speaker.lock = threading.Lock()
+        speaker.buf = bytearray()
+        speaker.enqueued = speaker.played = speaker.dropped = 0
+        speaker.last_sound = 0.0
+        speaker.fx = Mock(process=lambda pcm: bytes(len(pcm)), reset=Mock())
+        speaker.play(b"\1\2\3\4")
+        self.assertEqual(bytes(speaker.buf), b"\0\0\0\0")
+        self.assertEqual(speaker.enqueued, 4)
+        speaker.stop()
+        speaker.fx.reset.assert_called_once()  # a cut utterance does not ring into the next
+        self.assertEqual(speaker.dropped, 4)
+
     def test_interrupt_uses_absolute_playback_offsets(self):
         speech = client.Speech.__new__(client.Speech)
+        speech.kind = "answer"
         speech.speaker = Sink(1200)
         speech.start = 1000
         speech.sentences = [["Already heard.", 1000, 1100], ["Not finished.", 1100, 1500]]

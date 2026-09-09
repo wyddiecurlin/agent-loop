@@ -61,21 +61,20 @@ def run_case(n: int, runtime: DockerRuntime, prompt: str) -> str:
 def run_suite(runtime: DockerRuntime) -> None:
 	results: list[bool] = []
 
-	# --- arithmetic / date tools -------------------------------------------------
+	# --- the clock in the system prompt ------------------------------------------
+	# There is no date tool any more: the loop stamps the system prompt with the date and
+	# the time at the start of every call, and the model is expected to just know.
 
-	answer = run_case(1, runtime, "Get today's date and compute the multiplication of month, day, and year.")
-	from datetime import datetime
+	answer = run_case(1, runtime, "What's today's date? Reply with just the date, in ISO format: year, month, day.")
 	today = datetime.now()
-	expected = today.month * today.day * today.year
-	results.append(check("case 1: product of month*day*year", contains_number(answer, expected), f"expected {expected}"))
+	results.append(check("case 1: today's date, from the prompt and not a tool",
+	                     today.strftime("%Y-%m-%d") in answer, f"expected {today:%Y-%m-%d}"))
 
-	answer = run_case(
-		2, runtime,
-		"Multiply month, day, and year of today's date, and do the same for the founding date of "
-		"China's communist party 1949.10.1, and substract the two results.",
-	)
-	expected = today.month * today.day * today.year - 10 * 1 * 1949
-	results.append(check("case 2: difference of the two products", contains_number(answer, expected), f"expected {expected}"))
+	answer = run_case(2, runtime, "What time is it right now? Reply with just the time, in 24-hour hours and minutes.")
+	now = datetime.now()
+	minutes = {(now.hour * 60 + now.minute + d) % (24 * 60) for d in range(-3, 1)}
+	said = {int(h) * 60 + int(m) for h, m in re.findall(r"(?<!\d)([01]?\d|2[0-3])[:.h]([0-5]\d)(?!\d)", answer)}
+	results.append(check("case 2: the time, within a few minutes", bool(said & minutes), f"expected about {now:%H:%M}"))
 
 	# --- filesystem / shell tools --------------------------------------------------
 
