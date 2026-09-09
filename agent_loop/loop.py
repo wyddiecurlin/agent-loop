@@ -156,6 +156,12 @@ STALL_NUDGE = (
 	"Do not explain your reasoning first - call the tool now, and if the task is already "
 	"finished or cannot be done, call `done`."
 )
+TRUNCATION_NUDGE = (
+	"Your last output was cut off by the output limit ({limit}) before the tool call was "
+	"complete, so it did nothing. Do not write it again. Anything long - code, a document, "
+	"a list - goes into a file with the file tools, and programs are run with the shell; "
+	"`done` is only for a short report of what you did and where it is."
+)
 
 
 PERSONA = '''
@@ -312,6 +318,13 @@ def agent_loop(
 		if answer is not None:
 			messages.append(Message(role='assistant', content=answer))
 			return finish_run("done", step)
+		if turn.stop_reason == "incomplete":
+			# The output limit cut the model off mid-call. The registry has refused the
+			# half-written arguments; left there, the model writes the same thing again
+			# and is cut off again. Say what happened and where long output belongs.
+			limit = f"{max_output_tokens} tokens" if max_output_tokens else "the output token limit"
+			log(f"[LOG] output cut off at {limit}")
+			messages.append(Message(role='user', content=TRUNCATION_NUDGE.format(limit=limit)))
 
 	log(f"[LOG] hit max_steps {max_steps}")
 	return finish_run("max_steps", max_steps)

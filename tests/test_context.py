@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from agent_loop.context import ContextBudget, model_limits
 from agent_loop.loop import AgentRun
-from agent_loop.providers import ChatProvider, OpenAIProvider, ModelTurn, Usage, ToolCall
+from agent_loop.providers import ChatProvider, OpenAIProvider, ModelTurn, Usage, ToolCall, resendable, resendable_arguments
 from tests.test_providers import FakeClient, pair, status_error
 from voice import bridge
 
@@ -146,6 +146,55 @@ class ResponseBudgetTests(unittest.TestCase):
         self.assertIn('second', calls[1][0])
         self.assertTrue(any(c.args[0]['type'] == 'context_cleared' for c in emit.call_args_list))
         self.assertFalse(emit.call_args.args[0]['ok'])
+
+
+class TruncatedCallTests(unittest.TestCase):
+    """A tool call cut off by the output limit (seen live 2026-09-09: `done` with a whole
+    program in it, at 128 tokens) must neither poison the next request nor be retried
+    verbatim."""
+    CUT = '{"answer": "here is the program:\\n```python\\nimport csv'
+
+    def test_invalid_arguments_are_resent_as_json_and_valid_ones_untouched(self):
+        self.assertEqual(resendable_arguments('{"a": 1}'), '{"a": 1}')
+        wrapped = json.loads(resendable_arguments(self.CUT))
+        self.assertEqual(wrapped, {'truncated': self.CUT})
+        items = [{'role': 'user', 'content': 'x'},
+                 {'type': 'function_call', 'call_id': 'c1', 'name': 'done', 'arguments': self.CUT},
+                 {'type': 'function_call_output', 'call_id': 'c1', 'output': 'error: not JSON'}]
+        sent = resendable(items)
+        self.assertEqual(items[1]['arguments'], self.CUT)  # history keeps what the model said
+        json.loads(sent[1]['arguments'])
+        self.assertEqual(resendable('plain prompt'), 'plain prompt')
+        chat = ChatProvider._to_chat_messages(items)
+        json.loads(chat[1]['tool_calls'][0]['function']['arguments'])
+
+    def test_loop_tells_the_model_what_was_cut_off_and_where_long_output_goes(self):
+        requests = []
+        def generate(**kwargs):
+            requests.append(deepcopy(kwargs['messages']))
+            if len(requests) == 1:
+                return ModelTurn(None, [ToolCall('c1', 'done', self.CUT)], Usage(input_tokens=10, output_tokens=128), 'incomplete')
+            return ModelTurn(None, [ToolCall('c2', 'done', '{"answer": "It is in weather.py and it ran."}')], Usage(input_tokens=10), 'tool_calls')
+        registry = Mock()
+        registry.schema.return_value = []
+        def execute(call):
+            ok = call.id == 'c2'
+            out = 'It is in weather.py and it ran.' if ok else "arguments for 'done' are not valid JSON"
+            return SimpleNamespace(ok=ok, output=out, to_model_output=lambda: out)
+        registry.execute.side_effect = execute
+        with patch.object(loop, 'generate', side_effect=generate), patch.object(loop, 'build_registry', return_value=registry):
+            run = loop.agent_loop('write me a program', None, system_prompt='rules', verbose=False, max_output_tokens=128)
+        self.assertTrue(run.ok)
+        self.assertEqual(run.answer, 'It is in weather.py and it ran.')
+        self.assertEqual(len(requests), 2)
+        second = requests[1]
+        self.assertEqual(second[-1]['role'], 'user')
+        self.assertIn('128 tokens', second[-1]['content'])
+        self.assertIn('file', second[-1]['content'])
+        self.assertEqual(second[-2]['type'], 'function_call_output')
+        self.assertEqual(second[-3]['arguments'], self.CUT)
+        # A clean turn under the limit gets no nudge.
+        self.assertFalse(any(m.get('role') == 'user' and 'cut off' in m.get('content', '') for m in requests[0]))
 
 
 if __name__ == '__main__':

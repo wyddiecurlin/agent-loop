@@ -18,6 +18,7 @@ Fireworks and Together serve the same six models, so `FallbackProvider` pairs th
 Fireworks will not serve a request, the same weights are one alias lookup away.
 """
 
+import json
 import os
 import random
 import sys
@@ -326,6 +327,30 @@ class FunctionCallOutputItem(TypedDict):
 
 
 InputItem = Message | FunctionCallItem | FunctionCallOutputItem
+
+
+def resendable_arguments(arguments: str) -> str:
+	"""A tool call's arguments as the model emitted them, unless they are not JSON.
+
+	A call cut off by the output limit is refused by the registry, which is right, but
+	echoing its half-written string back into the next request is not: vLLM parses every
+	assistant tool call while rendering the chat template and refuses the whole request
+	with a 400, and the call sits in history, so every later turn fails the same way. Send
+	a JSON object carrying the fragment instead; the model still sees what it cut off."""
+	try:
+		json.loads(arguments)
+		return arguments
+	except (TypeError, ValueError):
+		return json.dumps({"truncated": arguments})
+
+
+def resendable(messages: "Messages") -> "Messages":
+	"""`messages` with every function_call's arguments made safe to send back."""
+	if isinstance(messages, str):
+		return messages
+	return [{**m, "arguments": resendable_arguments(m["arguments"])}
+	        if m.get("type") == "function_call" else m for m in messages]
+
 # `input` may be a bare string (shorthand for one user message) or an ordered list of items.
 Messages = str | list[InputItem]
 
@@ -386,7 +411,7 @@ class OpenAIProvider:
 	) -> ModelTurn:
 		kwargs: dict = {
 			"model": model,
-			"input": messages,
+			"input": resendable(messages),
 			"timeout": _env("AGENT_TIMEOUT_S", timeout),
 			"reasoning": {"effort": DEFAULT_REASONING_EFFORT},
 		}
@@ -569,7 +594,7 @@ class ChatProvider:
 				call = {
 					"id": item["call_id"],
 					"type": "function",
-					"function": {"name": item["name"], "arguments": item["arguments"]},
+					"function": {"name": item["name"], "arguments": resendable_arguments(item["arguments"])},
 				}
 				# Merge consecutive tool calls into one assistant message (chat format).
 				if out and out[-1]["role"] == "assistant" and out[-1].get("tool_calls") and out[-1].get("content") is None:
