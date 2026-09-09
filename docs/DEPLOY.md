@@ -58,7 +58,8 @@ not the base.
 |---|---|---|
 | this repo | `~/Documents/agent-loop`, branch `main` | `run.sh` rebuilds the image per session; warm rebuild 0.5 s |
 | `.env` | same dir, mode 600 | `PROVIDER=qwen`, `QWEN_BASE_URL=http://172.17.0.1:9000/v1`, `QWEN_THINKING=0`; Fireworks/Together keys kept for fallback |
-| gateway | `~/Documents/pet-moment/mobile-app/gateway`, Python 3.12 venv via `uv` | rsync'd from the Mac; the directory is untracked in pet-moment |
+| gateway | `~/Documents/pet-moment/mobile-app/gateway`, Python 3.12 venv via `uv` | `~/Documents/pet-moment` is a clone of `LemonTree-Media-LLC/pet-moment` on `main`; the `.venv` inside `gateway/` is untracked, keep it |
+| voice logs | `~/Documents/agent-loop/logs/voice/<timestamp>/`, `latest` symlink | every app session's `session.log`, `events.jsonl`, `turns/`; `MIMO_VOICE_LOG=0` off, `MIMO_VOICE_LOG_AUDIO=1` keeps WAVs. Reading them: `.claude/skills/debug-voice` |
 | gateway unit | `~/.config/systemd/user/mimo-gateway.service` | `127.0.0.1:8787`; token and `VOICE_API` in `~/.config/mimo/gateway.env` |
 | nginx vhost | `~/vllm/deploy/mimo.lemontree.media` → `/etc/nginx/sites-enabled/` | Tailscale ACL, wildcard cert; `/v1/voice` through `ws-proxy.conf`, the rest through `qwen-proxy.conf` |
 | root steps | `sudo ~/vllm/deploy/install-mimo-nginx.sh` | ufw `docker0 → :9000`, `libportaudio2`, vhost, dnsmasq entry |
@@ -79,12 +80,18 @@ Two things that bit:
 
 ## Redeploy
 
+Both repos are pulled on the box; nothing is rsync'd. Commit and push first.
+
 ```
-ssh lemontree 'cd ~/Documents/agent-loop && git pull --ff-only'
-rsync -a --exclude .venv --exclude __pycache__ \
-  ../pet-moment/mobile-app/gateway/ lemontree:~/Documents/pet-moment/mobile-app/gateway/
-ssh lemontree 'systemctl --user restart mimo-gateway && cd ~/Documents/pet-moment/mobile-app/gateway && .venv/bin/python -m unittest test_server'
+ssh lemontree 'cd ~/Documents/agent-loop && git pull --ff-only'      # takes effect on the next session
+../pet-moment/mobile-app/gateway/deploy-gateway.sh --test             # pull pet-moment, test, restart, health
 ```
+
+`run.sh` rebuilds the container image per session and the gateway's worker imports the
+voice client from the checkout per connection, so agent-loop needs no restart. The gateway
+does: `deploy-gateway.sh` refuses to run with unpushed gateway commits, pulls the clone,
+optionally runs its unit tests, restarts `mimo-gateway`, and waits for `/health` to answer
+200 with the token from `gateway.env`. Set `HOST=` for another box.
 
 Smoke test from any tailnet machine, with the token from `~/.config/mimo/gateway.env`:
 
