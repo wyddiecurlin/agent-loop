@@ -92,11 +92,6 @@ You are talking out loud through a speech synthesizer, and the user is listening
   up, you said it out loud already: do not say it again, just give what you found.
 '''
 
-CAPPED_VOICE_RULES = (
-	"\nKeep the spoken answer to one or two short sentences, at most 35 words. "
-	"Leave room in the output budget for complete tool-call JSON.\n"
-)
-
 # The parallel call: the same character, asked only whether the turn will take a moment.
 PREAMBLE_PROMPT = PERSONA + '''
 	THIS CALL:
@@ -305,8 +300,6 @@ def serve(stdin, runtime: DockerRuntime, preamble: Callable[[list | None, str], 
 		try:
 			options = turn_options(msg, defaults)
 			system_prompt = SYSTEM_PROMPT + VOICE_RULES
-			if options.get("max_output_tokens") is not None:
-				system_prompt += CAPPED_VOICE_RULES
 			budget = None
 			if mode := options.get("mode"):
 				if mode not in budgets:

@@ -454,12 +454,13 @@ def build_registry(runtime: DockerRuntime, allow: Iterable[str] | None = None,
 				"the user; if it cannot be completed, call this anyway and use `answer` to say what "
 				"was tried and why it failed. `answer` must stand on its own - state the actual "
 				"values, file names, and command output you found rather than referring back to "
-				"earlier steps. Call it exactly once, by itself."
+				"earlier steps. Answer concisely in a few short sentences. "
+				"Call it exactly once, by itself."
 			),
 			input_schema={
 				"type": "object",
 				"properties": {
-					"answer": {"type": "string", "description": "The complete final answer, or the reason the task failed."},
+					"answer": {"type": "string", "description": "The final answer, or the reason the task failed, in a few concise sentences."},
 				},
 				"required": ["answer"],
 			},

@@ -61,9 +61,8 @@ def run_case(n: int, runtime: DockerRuntime, prompt: str) -> str:
 def run_suite(runtime: DockerRuntime) -> None:
 	results: list[bool] = []
 
-	# --- the clock in the system prompt ------------------------------------------
-	# There is no date tool any more: the loop stamps the system prompt with the date and
-	# the time at the start of every call, and the model is expected to just know.
+	# --- date context and current time -------------------------------------------
+	# The loop stamps the date at the start of every call. Current time needs a tool.
 
 	answer = run_case(1, runtime, "What's today's date? Reply with just the date, in ISO format: year, month, day.")
 	today = datetime.now()

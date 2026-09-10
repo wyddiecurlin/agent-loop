@@ -157,7 +157,7 @@ The loop runs where we say **structurally**, not by convention:
 
 **Only effectful tools are bound.** `done` touches nothing, so there is nothing to
 contain. (The date is not a tool either: `loop.py` stamps the system prompt with the date
-and time at the start of every call, in the container's zone, which is UTC unless `TZ` is
+at the start of every call, in the container's zone, which is UTC unless `TZ` is
 in `.env`.) The invariant is not "every tool runs in the sandbox" but:
 
 > Every tool that touches the filesystem or spawns a process does so only through the

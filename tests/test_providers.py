@@ -130,6 +130,51 @@ class FakeClient:
 		self.chat = type("c", (), {"completions": _Completions()})()
 
 
+class StreamingClient:
+	"""A client that streams one tool call in chunks and reports what vLLM reports.
+
+	vLLM ends a stream that max_tokens cut mid-arguments with finish_reason="tool_calls",
+	the same word it uses for a call that finished - only its non-streaming reply says
+	"length". `finish` and `completion_tokens` are the two knobs that reproduce it.
+	"""
+
+	def __init__(self, args: str, finish: str = "tool_calls", completion_tokens: int = 128):
+		self.args, self.finish, self.completion_tokens = args, finish, completion_tokens
+		outer = self
+
+		class _Chunk:
+			def __init__(self, delta_tc=None, finish=None, usage=None):
+				delta = type("delta", (), {"content": None, "tool_calls": delta_tc})()
+				self.choices = [] if usage else [type("ch", (), {"delta": delta, "finish_reason": finish})()]
+				self.usage = usage
+
+		class _Delta:
+			def __init__(self, index, id, name, arguments):
+				self.index, self.id = index, id
+				self.function = type("fn", (), {"name": name, "arguments": arguments})()
+
+		class _StreamUsage:
+			prompt_tokens, completion_tokens = 1000, outer.completion_tokens
+			prompt_tokens_details = completion_tokens_details = None
+
+		class _Raw_:
+			def create(self, **kw):
+				if bad := sorted(set(kw) - SDK_PARAMS):
+					raise TypeError(f"Completions.create() got unexpected keyword arguments {bad}")
+				outer.seen = kw
+				half = len(outer.args) // 2
+				chunks = [_Chunk([_Delta(0, "call_1", "fs_write", "")]),
+				          _Chunk([_Delta(0, None, None, outer.args[:half])]),
+				          _Chunk([_Delta(0, None, None, outer.args[half:])], finish=outer.finish),
+				          _Chunk(usage=_StreamUsage())]
+				return type("raw", (), {"headers": {}, "parse": lambda self: iter(chunks)})()
+
+		class _Completions:
+			with_raw_response = _Raw_()
+
+		self.chat = type("c", (), {"completions": _Completions()})()
+
+
 def status_error(code: int) -> APIStatusError:
 	req = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
 	return APIStatusError("boom", response=httpx.Response(code, request=req), body=None)
@@ -301,6 +346,25 @@ def main(argv: list[str]) -> int:
 	                     and u.cost_usd > 0, str(u)))
 	results.append(check("tool calls survive the translation",
 	                     turn.tool_calls and turn.tool_calls[0].name == "done"))
+
+	#     A streamed call that the output cap cut in half arrives with finish_reason
+	#     "tool_calls" and exactly max_tokens of output. The loop's cut-off nudge keys on
+	#     stop_reason "incomplete"; anything else and the model rewrites the same half-file
+	#     every step until max_steps (a voice turn did, 113 times). A call that merely
+	#     fills the cap but parses is complete and must stay so.
+	def streamed(args, **kw):
+		return ChatProvider(backend="qwen", client=StreamingClient(args, **kw)).generate(
+			"hi", "qwen3.5-9b", [{"name": "fs_write", "description": "", "parameters": {}}],
+			stream=True, tool_choice="required", max_output_tokens=128)
+	cut = streamed('{"path": "lm.py", "content": "import numpy as np\\n')
+	results.append(check("a call cut off at the cap is incomplete, whatever the stream says",
+	                     cut.stop_reason == "incomplete", f"got {cut.stop_reason!r}"))
+	full = streamed('{"path": "fizz.py", "content": "print(1)"}')
+	results.append(check("...but a parseable call that fills the cap is complete",
+	                     full.stop_reason == "completed", f"got {full.stop_reason!r}"))
+	under = streamed('{"path": "lm.py", "content": "import', completion_tokens=40)
+	results.append(check("...and under the cap the stream's word stands",
+	                     under.stop_reason == "completed", f"got {under.stop_reason!r}"))
 
 	#     ...and on Fireworks the body's cached_tokens is a lie. It is present and always
 	#     0 while the real count rides in a header, so believing the body bills a whole

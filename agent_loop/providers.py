@@ -531,6 +531,15 @@ def cached_header(headers) -> int | None:
 		return None
 
 
+def _parses(arguments: str) -> bool:
+	"""Whether a tool call's argument string is complete JSON."""
+	try:
+		json.loads(arguments)
+	except (ValueError, TypeError):
+		return False
+	return True
+
+
 class ChatProvider:
 	"""Any OpenAI-compatible Chat Completions endpoint, hosted or self-hosted.
 
@@ -689,7 +698,7 @@ class ChatProvider:
 				for tc in (choice.message.tool_calls or [])
 			]
 			return self._to_turn(text, calls, resp.usage, choice.finish_reason, model,
-			                     cached_header(raw.headers))
+			                     cached_header(raw.headers), cap=kwargs["max_tokens"])
 
 		# Streaming: accumulate text + tool-call fragments keyed by index.
 		text_parts: list[str] = []
@@ -733,10 +742,10 @@ class ChatProvider:
 			for i, slot in sorted(pending.items())
 		]
 		return self._to_turn("".join(text_parts) or None, calls, usage, finish, model,
-		                     cached_header(raw.headers))
+		                     cached_header(raw.headers), cap=kwargs["max_tokens"])
 
 	def _to_turn(self, text, calls, raw_usage, finish_reason, model: str,
-	             cached_from_header: int | None = None) -> ModelTurn:
+	             cached_from_header: int | None = None, cap: int | None = None) -> ModelTurn:
 		usage = None
 		if raw_usage is not None:
 			in_details = getattr(raw_usage, "prompt_tokens_details", None)
@@ -755,6 +764,14 @@ class ChatProvider:
 			)
 		# Map chat finish_reason onto the Responses-style status the loop expects.
 		stop = {"stop": "completed", "tool_calls": "completed", "length": "incomplete"}.get(finish_reason, finish_reason)
+		# vLLM's stream says finish_reason="tool_calls" for a call that max_tokens cut off
+		# mid-arguments; only its non-streaming reply says "length". The loop's cut-off
+		# nudge keys on "incomplete", so trusting the stream left a voice turn rewriting
+		# the same half-file until max_steps. The token count is the honest signal: at
+		# the cap with no call, or a call whose arguments do not parse, nothing finished.
+		if stop == "completed" and cap is not None and usage is not None and usage.output_tokens >= cap:
+			if not calls or any(not _parses(c.arguments) for c in calls):
+				stop = "incomplete"
 		return ModelTurn(text=text, tool_calls=calls or None, usage=usage, stop_reason=stop)
 
 

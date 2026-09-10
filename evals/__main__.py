@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
 			passed = sum(x.passed for x in results)
 			log(f"[{'PASS' if r.passed else 'FAIL'}] {r.task_id}  ({i}/{len(tasks)}, "
 			    f"running {passed}/{i} = {passed / i:.1%})  "
-			    f"[{r.stop_reason}, {r.steps} turns, {r.repeated_calls} repeats]"
+			    f"[{r.stop_reason}, {r.steps} turns]"
 			    + (f"  -- {r.reason}" if r.reason else ""))
 	finally:
 		runtime.teardown()
@@ -123,7 +123,6 @@ def main(argv: list[str] | None = None) -> int:
 		"stop_reasons": dict(stops.most_common()),
 		"tool_calls": dict(tool_totals.most_common()),
 		"turns_mean": round(sum(r.steps for r in results) / total, 1) if total else 0,
-		"repeated_calls_total": sum(r.repeated_calls for r in results),
 		"usage": asdict(TRACKER.total),
 		"results": [asdict(r) for r in results],
 	}
@@ -131,8 +130,7 @@ def main(argv: list[str] | None = None) -> int:
 	print()
 	log(f"\n==> {args.dataset} pass@1 = {passed}/{total} = {summary['pass@1']:.1%}   "
 	    f"({summary['duration_s']}s, ${TRACKER.total.cost_usd:.4f})")
-	log(f"    stop_reasons={summary['stop_reasons']}  turns_mean={summary['turns_mean']}  "
-	    f"repeats={summary['repeated_calls_total']}")
+	log(f"    stop_reasons={summary['stop_reasons']}  turns_mean={summary['turns_mean']}")
 	log(f"    tool_calls={summary['tool_calls']}")
 	return 0 if total else 1
 

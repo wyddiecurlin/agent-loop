@@ -101,14 +101,6 @@ def stream_tool_calls(t: str, kind: Literal["function_call", "function_args"]) -
 @dataclass
 class AgentRun:
 	"""What one agent_loop call did, as a struct rather than a bare message list.
-
-	The list alone could not answer "why did this stop". A run that exhausted its budget
-	and one that called `done` with an empty answer both ended with no answer, and a run
-	whose provider raised did not come back at all - so a caller measuring failures could
-	not tell a scaffold problem from a wrong answer. `stop_reason` is that distinction.
-
-	`steps` counts model turns. len(messages) grows about three items per turn, so
-	reporting it as "steps" reads as four times more work than actually happened.
 	"""
 	messages: list[InputItem]
 	stop_reason: Literal["done", "max_steps", "error", "stalled"]
@@ -128,25 +120,6 @@ class AgentRun:
 		"""How many times each tool was called, most used first."""
 		names = Counter(m["name"] for m in self.messages if m.get("type") == "function_call")
 		return dict(names.most_common())
-
-	def repeated_calls(self) -> int:
-		"""Calls that repeat an earlier (name, arguments) pair exactly.
-
-		A loop that is stuck usually is not varying its input. This separates "the task
-		needed 30 turns" from "the model asked the same thing 30 times", which need
-		opposite fixes: a bigger budget, or an escape from the rut.
-		"""
-		seen: set[tuple[str, str]] = set()
-		repeats = 0
-		for m in self.messages:
-			if m.get("type") != "function_call":
-				continue
-			key = (m["name"], m["arguments"])
-			if key in seen:
-				repeats += 1
-			else:
-				seen.add(key)
-		return repeats
 
 
 
@@ -182,10 +155,9 @@ PERSONA = '''
 	- Short by default: the answer first, the reasons after, and only the ones that matter.
 '''
 
-SYSTEM_PROMPT = '''
-	You are an agent that completes tasks by invoking tools according to user's requests.
-''' + PERSONA + '''
+SYSTEM_PROMPT = PERSONA + '''
 	RULES:
+	- You have access to your own linux computer, a working directory, and fs + shell tools
 	- Use web search and fetch for user's reqeusts relating to recent news, movies, etc
 	- Every turn must call at least one tool; there is no way to reply with plain text.
 	- If you announce that you are going to call a tool, call it in the same turn.
@@ -200,18 +172,16 @@ SYSTEM_PROMPT = '''
 
 
 def stamp(system_prompt: str, now: datetime | None = None) -> str:
-	"""`system_prompt` with the current date and time on the end.
+	"""`system_prompt` with the current date on the end.
 
-	There is no clock tool: the model reads the time here, and the system message is
-	rebuilt with a fresh stamp at the start of every agent_loop call, so a conversation
-	that lasts an hour does not keep believing it is still the first minute. The zone is
-	named because the container's clock is UTC unless TZ is set (run.sh passes .env
-	through; voice/bridge.py takes the host's zone from the client).
+	Refresh at the start of every agent_loop call so the date follows midnight while
+	the prompt prefix stays stable throughout the day. The date uses the container's
+	zone, UTC unless TZ is set (voice/bridge.py takes the host's zone from the client).
 	"""
 	now = now or datetime.now().astimezone()
-	when = f"{now:%A}, {now.day} {now:%B} {now.year}, {now.hour:02d}:{now.minute:02d} ({now.tzname() or 'UTC'})"
-	return (f"{system_prompt.rstrip()}\n\tRight now it is {when}. Use this for anything that "
-	        f"depends on the date or the time.\n")
+	when = f"{now:%A}, {now.day} {now:%B} {now.year}"
+	return (f"{system_prompt.rstrip()}\n\tToday is {when}. Use this for anything that "
+	        f"depends on the date.\n")
 
 
 def agent_loop(
@@ -245,7 +215,7 @@ def agent_loop(
 	system = Message(role='system', content=stamp(system_prompt))
 	messages: list[InputItem] = list(history) if history else [system]
 	if history and messages[0].get("role") == "system":
-		messages[0] = system  # the clock moved on since the conversation started
+		messages[0] = system  # the date may have changed since the conversation started
 	current_start = len(messages)
 	messages.append(Message(role='user', content=prompt))
 	history_cleared = False

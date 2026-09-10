@@ -38,7 +38,6 @@ def merge(paths: list[str]) -> dict:
 		"stop_reasons": dict(collections.Counter(r["stop_reason"] for r in rows).most_common()),
 		"tool_calls": dict(tools.most_common()),
 		"turns_mean": round(sum(r["steps"] for r in rows) / n, 1) if n else 0,
-		"repeated_calls_total": sum(r.get("repeated_calls", 0) for r in rows),
 		"usage": dict(usage),
 		"results": rows,
 	}

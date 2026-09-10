@@ -341,15 +341,16 @@ connection defaults; explicit null removes an override. Existing clients that se
 neither retain their original behavior.
 
 ```json
-{"type":"clock","tz":"America/Los_Angeles","max_output_tokens":128,"mode":"auto-clear"}
+{"type":"clock","tz":"America/Los_Angeles","max_output_tokens":8192,"mode":"auto-clear"}
 {"type":"prompt","text":"Hello"}
 {"type":"prompt","text":"Explain briefly","max_output_tokens":256}
 ```
 
 The cap applies to each main-agent generation, including fallback, rather than the
 sum across tool steps. Capped voice requests use the model's lowest supported
-reasoning setting and ask for one or two sentences / at most 35 words. This keeps
-local Qwen's optional thinking from consuming its mobile answer budget. Always-on
+reasoning setting. Voice instructions and the `done` tool ask for a few concise
+sentences as a soft limit; the larger generation budget leaves room for tool arguments.
+This keeps local Qwen's optional thinking from consuming its mobile output budget. Always-on
 reasoning models may still require a larger budget. Tool arguments count toward
 the same cap; it is not a guarantee of a valid final answer or of speech duration.
 

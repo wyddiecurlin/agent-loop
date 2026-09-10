@@ -25,6 +25,9 @@ dist/
 .idea/
 .DS_Store
 
+# Separate agent checkouts
+.claude/worktrees/
+
 # Logs
 *.log
 

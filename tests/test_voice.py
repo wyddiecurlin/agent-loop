@@ -390,9 +390,9 @@ def test_preamble() -> bool:
 	call = pv.calls[0]
 	ok &= check("no tools, no stream, a short timeout", call["tools"] is None and call["stream"] is False
 	            and call["timeout"] <= 30 and call["model"] == "m")
-	ok &= check("it sees the character, the clock, the recent talk and the prompt",
+	ok &= check("it sees the character, the date, the recent talk and the prompt",
 	            call["messages"][0]["role"] == "system" and "CHARACTER" in call["messages"][0]["content"]
-	            and "Right now it is" in call["messages"][0]["content"]
+	            and "Today is" in call["messages"][0]["content"]
 	            and [m["content"] for m in call["messages"][1:]] == ["hi", "hey", "what's in theaters?"]
 	            and not any(m.get("type") for m in call["messages"]), str(call["messages"])[:300])
 	ok &= check("the prompt tells it when to say nothing, and never to laugh",

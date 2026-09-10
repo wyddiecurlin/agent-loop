@@ -71,7 +71,6 @@ class Result:
 	# What the model actually did with its turns. A budget that binds and a model that is
 	# stuck look identical in the score and completely different here.
 	tools_used: dict[str, int] = field(default_factory=dict)
-	repeated_calls: int = 0
 
 
 def grade(runtime: DockerRuntime, task: Task, token: str) -> tuple[bool, str]:
@@ -129,13 +128,13 @@ def run_task(
 	if task.seed:
 		runtime.put(task.seed)
 
-	steps, answer, stop_reason, hist, repeats = 0, "", "canonical", {}, 0
+	steps, answer, stop_reason, hist = 0, "", "canonical", {}
 	if canonical:
 		runtime.write(SOLUTION, task.canonical)
 	else:
 		run = agent_loop(task.instruction, runtime, max_steps=max_steps, tools=tools)
 		steps, answer, stop_reason = run.steps, run.answer, run.stop_reason
-		hist, repeats = run.tool_histogram(), run.repeated_calls()
+		hist = run.tool_histogram()
 
 	passed, reason = grade(runtime, task, token)
 	# The grader only ever sees the workspace, so on its own it reports "no solution.py"
@@ -153,4 +152,4 @@ def run_task(
 		cost_usd=TRACKER.total.cost_usd - before.cost_usd,
 	)
 	return Result(task.task_id, passed, reason, steps, time.perf_counter() - started,
-	              usage, answer, stop_reason, hist, repeats)
+	              usage, answer, stop_reason, hist)
