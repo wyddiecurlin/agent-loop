@@ -1,0 +1,5 @@
+project_id = "agent-loop"
+
+[functions.container-access]
+# The handler validates Supabase user JWTs or opaque container grants itself.
+verify_jwt = false

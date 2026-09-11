@@ -1,4 +1,4 @@
-"""Web search and fetch: the only module that opens a socket on its own (docs/WEB.md).
+"""Trusted web search and fetch clients (docs/WEB.md).
 
 Search is one call to Brave's Web Search API. Fetch is a GET, HTML to markdown, and -
 when the caller says what it is looking for - a second call to the self-hosted model
@@ -16,7 +16,7 @@ import os
 import re
 import socket
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
@@ -241,7 +241,7 @@ class WebClient:
 
 	def __init__(self, api_key: str | None = None, http: httpx.Client | None = None,
 	             extractor: Any = None, *, provider: str | None = None, mode: str | None = None,
-	             fallback: bool = True):
+	             fallback: bool = True, credential: Callable[[str], str] | None = None):
 		# extractor is a providers.Provider; imported lazily below.
 		self.provider = provider or os.getenv("WEB_SEARCH_PROVIDER", "brave")
 		self.mode = mode or os.getenv("PARALLEL_SEARCH_MODE", "fast")
@@ -249,6 +249,7 @@ class WebClient:
 			raise ValueError("WEB_SEARCH_PROVIDER must be brave or parallel")
 		if self.provider == "parallel" and self.mode not in ("fast", "advanced"):
 			raise ValueError("PARALLEL_SEARCH_MODE must be fast or advanced")
+		self.credential = credential
 		self.api_key = api_key
 		self.fallback = fallback
 		self._http = http or httpx.Client(timeout=TIMEOUT_S, follow_redirects=False,
@@ -259,17 +260,17 @@ class WebClient:
 		try:
 			return self._search(query, limit, allowed_domains)
 		except (httpx.HTTPError, RuntimeError, ValueError, KeyError, TypeError, AttributeError):
-			if not (self.provider == "brave" and self.fallback and os.getenv(PARALLEL_KEY_ENV)):
+			if not (self.provider == "brave" and self.fallback and (self.credential or os.getenv(PARALLEL_KEY_ENV))):
 				raise
 			# One attempt with separate credentials; empty Brave results are still success.
-			return WebClient(http=self._http, provider="parallel", mode="advanced", fallback=False)._search(
+			return WebClient(http=self._http, provider="parallel", mode="advanced", fallback=False, credential=self.credential)._search(
 				query, limit, allowed_domains)
 
 	def _search(self, query: str, limit: int, allowed_domains: list[str] | None) -> list[SearchHit]:
 		limit = max(1, min(limit, 20))
 		domains = [allowed_domains] if isinstance(allowed_domains, str) else allowed_domains
 		key_env = PARALLEL_KEY_ENV if self.provider == "parallel" else BRAVE_KEY_ENV
-		key = self.api_key or os.getenv(key_env)
+		key = self.credential(self.provider) if self.credential else self.api_key or os.getenv(key_env)
 		if not key:
 			raise RuntimeError(f"{key_env} is not set in the environment or .env")
 		if self.provider == "parallel":
@@ -346,7 +347,12 @@ class WebClient:
 		from .providers import QWEN_MODEL, TRACKER, ChatProvider
 
 		if self._extractor is None:
-			self._extractor = ChatProvider("qwen", thinking=False, max_output_tokens=MAX_ANSWER_TOKENS)
+			client = None
+			if self.credential:
+				from .credentials import sdk_client
+				from .providers import BACKENDS
+				client = sdk_client("qwen", self.credential, base_url=os.getenv("QWEN_BASE_URL", BACKENDS["qwen"].base_url))
+			self._extractor = ChatProvider("qwen", client=client, thinking=False, max_output_tokens=MAX_ANSWER_TOKENS)
 		turn = self._extractor.generate(
 			[
 				{"role": "system", "content": EXTRACT_SYSTEM},

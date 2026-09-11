@@ -5,6 +5,8 @@
 #   docker build --target test -t agent-loop:test .
 #
 # Beyond the agent's deps the runtime owes itself one thing: git, for snapshot/reset.
+FROM denoland/deno:bin-2.4.5 AS deno
+
 FROM python:3.12-slim AS dev
 
 RUN apt-get update \
@@ -22,6 +24,7 @@ ENV PYTHONPATH=/app PYTHONUNBUFFERED=1
 # the *model* writes runs as `sandbox`, which cannot read /proc/1/environ and cannot
 # escalate back. /work is group-writable so both can edit the same files.
 RUN groupadd work && useradd -M -d /tmp -g work sandbox \
+ && mkdir -p /run/agent-loop/private && chmod 700 /run/agent-loop/private \
  && mkdir -p /work && chgrp work /work && chmod 2775 /work \
  && git config --system safe.directory '*'
 
@@ -32,10 +35,15 @@ RUN groupadd work && useradd -M -d /tmp -g work sandbox \
 RUN chmod 700 /app
 
 WORKDIR /work
-ENTRYPOINT ["python", "-m", "agent_loop"]
+ENTRYPOINT ["python", "-P", "-m", "agent_loop"]
 
 FROM dev AS test
+COPY --from=deno /deno /usr/local/bin/deno
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql \
+ && rm -rf /var/lib/apt/lists/*
 COPY tests/ /app/tests/
 COPY evals/ /app/evals/
+COPY launcher/ /app/launcher/
+COPY supabase/ /app/supabase/
 # Re-assert after the COPYs above, which recreate /app's children.
 RUN chmod 700 /app

@@ -442,7 +442,7 @@ def build_registry(runtime: DockerRuntime, allow: Iterable[str] | None = None,
 	model ever sees - not refused at call time, which would still leave it discoverable.
 	"""
 	bind = lambda fn: partial(fn, runtime)  # noqa: E731
-	web = web or WebClient()
+	web = web or WebClient(credential=runtime.credentials.credential if runtime.credentials else None)
 	today = f"{date.today():%B %Y}"
 
 	tools = [
@@ -611,6 +611,15 @@ def build_registry(runtime: DockerRuntime, allow: Iterable[str] | None = None,
 			execute=partial(web_fetch, web),
 		),
 	]
+
+	if runtime._control_socket:
+		tools.append(Tool(
+			name="mount_volume",
+			description="Mount a host folder into this session. Read-only by default; request writable access only when the user asks for it. The session restarts after this tool turn and returns at the mounted path.",
+			input_schema={"type": "object", "properties": {
+				"host_path": {"type": "string"}, "read_only": {"type": "boolean", "default": True}}, "required": ["host_path"]},
+			execute=runtime.mount_volume,
+		))
 
 	if allow is not None:
 		keep = set(allow) | {DONE_TOOL}

@@ -147,7 +147,7 @@ def ask_summary(provider, model: str, answer: str, max_seconds: float) -> str:
 	return text
 
 
-def preamble_provider():
+def preamble_provider(runtime: DockerRuntime | None = None):
 	"""The side call's provider: the main one's platform, but with thinking off and a cap.
 
 	Left as the main loop has it, a self-hosted model with QWEN_THINKING=1 reasons for
@@ -155,10 +155,16 @@ def preamble_provider():
 	with thinking off). The hosted models take their cheapest reasoning effort instead.
 	"""
 	name = os.environ.get("PROVIDER", "fireworks").lower()
+	credential = runtime.credentials.credential if runtime is not None and runtime.credentials else None
 	if name in BACKENDS:
-		return ChatProvider(backend=name, timeout=PREAMBLE_TIMEOUT_S,
+		client = None
+		if credential:
+			from agent_loop.credentials import sdk_client
+			backend = BACKENDS[name]
+			client = sdk_client(name, credential, base_url=os.getenv(backend.base_url_env, backend.base_url), timeout=PREAMBLE_TIMEOUT_S)
+		return ChatProvider(backend=name, client=client, timeout=PREAMBLE_TIMEOUT_S,
 		                    max_output_tokens=PREAMBLE_MAX_TOKENS, thinking=False)
-	return make_provider(timeout=PREAMBLE_TIMEOUT_S)
+	return make_provider(timeout=PREAMBLE_TIMEOUT_S, credential=credential)
 
 INTERRUPTED = ('(You were interrupted mid-answer; the confirmed fully played speech was: "{heard}". '
                'The user may also have heard part of the next segment. Do not assume they heard '
@@ -412,7 +418,8 @@ def serve(stdin, runtime: DockerRuntime, preamble: Callable[[list | None, str], 
 
 
 def main() -> int:
-	load_dotenv()
+	if not os.getenv("AGENT_CONTROL_SOCKET"):
+		load_dotenv()
 	# After load_dotenv, so an explicit setting in .env or the shell still wins. Read at
 	# call time by agent_loop.providers, so this need not race the imports above.
 	os.environ.setdefault("AGENT_TIMEOUT_S", str(VOICE_TIMEOUT_S))
@@ -426,7 +433,7 @@ def main() -> int:
 		model = f"unresolved: {exc}"
 	emit({"type": "ready", "provider": os.environ.get("PROVIDER", ""), "model": model})
 	try:
-		provider = preamble_provider()
+		provider = preamble_provider(runtime)
 		preamble = lambda history, prompt: ask_preamble(provider, model, history, prompt)  # noqa: E731
 		summarize = lambda answer, seconds: ask_summary(provider, model, answer, seconds)  # noqa: E731
 	except Exception as exc:  # noqa: BLE001 - then there is no preamble, and the turn will say why

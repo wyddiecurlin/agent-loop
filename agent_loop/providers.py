@@ -877,8 +877,12 @@ class FallbackProvider:
 DEFAULT_FALLBACK: dict[str, str] = {"fireworks": "together"}
 
 
-def _chat_provider(name: str, timeout: float) -> ChatProvider:
+def _chat_provider(name: str, timeout: float, credential: Callable[[str], str] | None = None) -> ChatProvider:
 	backend = BACKENDS[name]
+	if credential is not None:
+		from .credentials import sdk_client
+		return ChatProvider(backend=name, client=sdk_client(name, credential,
+			base_url=os.getenv(backend.base_url_env, backend.base_url), timeout=timeout))
 	# vLLM is happy without a key; a hosted platform is not, and finding that out on
 	# request 1 beats finding it out on request 200 of an eval shard.
 	if name != "qwen" and not os.getenv(backend.api_key_env):
@@ -886,7 +890,8 @@ def _chat_provider(name: str, timeout: float) -> ChatProvider:
 	return ChatProvider(backend=backend, timeout=timeout)
 
 
-def make_provider(name: str | None = None, timeout: float = DEFAULT_TIMEOUT_S) -> Provider:
+def make_provider(name: str | None = None, timeout: float = DEFAULT_TIMEOUT_S,
+                  credential: Callable[[str], str] | None = None) -> Provider:
 	"""Build the provider named by `name` (or the PROVIDER env var), and its fallback.
 
 	FALLBACK names the second platform; "none" or "" turns it off. Unset, Fireworks pairs
@@ -897,9 +902,9 @@ def make_provider(name: str | None = None, timeout: float = DEFAULT_TIMEOUT_S) -
 	timeout = _env("AGENT_TIMEOUT_S", timeout)
 	name = (name or os.getenv("PROVIDER", DEFAULT_PROVIDER)).lower()
 	if name in BACKENDS:
-		primary = _chat_provider(name, timeout)
+		primary = _chat_provider(name, timeout, credential)
 		requested = os.getenv("FALLBACK")
-		second = (requested if requested is not None else DEFAULT_FALLBACK.get(name, "")).lower()
+		second = (requested if requested is not None else ("" if credential else DEFAULT_FALLBACK.get(name, ""))).lower()
 		if second in ("", "none"):
 			return primary
 		if second not in BACKENDS or second == name:
@@ -908,16 +913,27 @@ def make_provider(name: str | None = None, timeout: float = DEFAULT_TIMEOUT_S) -
 			print(f"[fallback] none: {name} has no cover because "
 			      f"{BACKENDS[second].api_key_env} is not set", file=sys.stderr, flush=True)
 			return primary
-		return FallbackProvider(primary, _chat_provider(second, timeout))
+		return FallbackProvider(primary, _chat_provider(second, timeout, credential))
 	# NOTE: OpenAIProvider deliberately sends neither temperature nor seed. The Responses
 	# API reasoning models (gpt-5*) reject `temperature` outright, so there is no greedy
 	# setting to ask for - an OpenAI run cannot be made as repeatable as the others.
 	if name == "openai":
+		if credential is not None:
+			from .credentials import sdk_client
+			return OpenAIProvider(client=sdk_client(name, credential, timeout=timeout))
 		if not os.getenv("OPENAI_API_KEY"):
 			raise RuntimeError("OPENAI_API_KEY is not set in the environment or .env")
 		return OpenAIProvider(timeout=timeout)
 	known = ", ".join(["openai", *BACKENDS])
 	raise ValueError(f"unknown PROVIDER {name!r} (expected one of: {known})")
+
+
+def close_provider(provider: Provider) -> None:
+	if isinstance(provider, FallbackProvider):
+		close_provider(provider.primary)
+		close_provider(provider.secondary)
+	elif isinstance(provider, (ChatProvider, OpenAIProvider)):
+		provider.client.close()
 
 
 # The model each platform gets when the caller names none. Not the best model on the
