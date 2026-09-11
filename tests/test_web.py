@@ -12,6 +12,7 @@ search, one real fetch, and one extraction through the self-hosted model.
 import json
 import os
 import sys
+from unittest.mock import patch
 
 from agent_loop import web
 from agent_loop.providers import QWEN_MODEL, ModelTurn
@@ -116,7 +117,8 @@ class FakeExtractor:
 def client(**kw) -> WebClient:
 	return WebClient(api_key=kw.pop("api_key", "k"),
 	                 http=httpx.Client(transport=httpx.MockTransport(handler)),
-	                 extractor=kw.pop("extractor", FakeExtractor()), **kw)
+	                 extractor=kw.pop("extractor", FakeExtractor()),
+	                 provider=kw.pop("provider", "brave"), fallback=kw.pop("fallback", False), **kw)
 
 
 # -- URL policy ---------------------------------------------------------------
@@ -237,6 +239,127 @@ def t_search_without_a_key_names_the_variable():
 	finally:
 		if key is not None:
 			os.environ[web.BRAVE_KEY_ENV] = key
+
+
+@case
+def t_parallel_request_mapping_and_bounded_excerpts():
+	requests = []
+	def respond(request):
+		requests.append(request)
+		return httpx.Response(200, json={"results": [
+			{"title": "First", "url": "https://example.com/a", "publish_date": "2026-09-10",
+			 "excerpts": ["one", "two"]},
+			{"url": "https://example.com/b", "excerpts": ["x" * 20_000]},
+			{"url": "https://example.com/c"},
+		]})
+	for mode in ("fast", "advanced"):
+		c = WebClient(api_key="parallel-key", provider="parallel", mode=mode,
+		              http=httpx.Client(transport=httpx.MockTransport(respond)))
+		hits = c.search("graph breaks", limit=2, allowed_domains="example.com")
+		req = requests[-1]
+		assert req.method == "POST" and str(req.url) == web.PARALLEL_URL
+		assert req.headers["x-api-key"] == "parallel-key"
+		assert "x-subscription-token" not in req.headers
+		assert json.loads(req.content) == {
+			"search_queries": ["graph breaks"], "mode": mode,
+			"max_chars_total": web.SEARCH_EXCERPT_CHARS,
+			"advanced_settings": {"max_results": 2, "source_policy": {"include_domains": ["example.com"]}},
+		}
+		assert hits[0] == SearchHit("First", "https://example.com/a", "one\ntwo", "2026-09-10")
+		assert len(hits) == 2 and sum(len(h.snippet) for h in hits) == web.SEARCH_EXCERPT_CHARS
+		hits = c.search("x", limit=100)
+		assert json.loads(requests[-1].content)["advanced_settings"] == {"max_results": 20}
+		assert hits[-1] == SearchHit("", "https://example.com/c", "", "")
+
+
+@case
+def t_search_configuration_and_missing_credentials():
+	with patch.dict(os.environ, {}, clear=True):
+		assert WebClient().provider == "brave"
+		os.environ["WEB_SEARCH_PROVIDER"] = "parallel"
+		os.environ["PARALLEL_SEARCH_MODE"] = "advanced"
+		c = WebClient()
+		assert c.provider == "parallel" and c.mode == "advanced"
+		assert web.PARALLEL_KEY_ENV in raises(RuntimeError, c.search, "x")
+		os.environ[web.PARALLEL_KEY_ENV] = "key-from-env"
+		def respond(req):
+			assert req.headers["x-api-key"] == "key-from-env"
+			return httpx.Response(200, json={"results": []})
+		c._http = httpx.Client(transport=httpx.MockTransport(respond))
+		assert c.search("x") == []
+		assert "WEB_SEARCH_PROVIDER" in raises(ValueError, WebClient, provider="typo")
+		assert "PARALLEL_SEARCH_MODE" in raises(ValueError, WebClient, mode="typo")
+
+
+@case
+def t_search_empty_results_errors_and_timeouts_reach_the_agent():
+	for provider in ("brave", "parallel"):
+		for status in (200, 401, 429, 500):
+			http = httpx.Client(transport=httpx.MockTransport(
+				lambda req: httpx.Response(status, json={})))
+			c = WebClient(api_key="k", provider=provider, mode="fast", http=http, fallback=False)
+			reg = build_registry(DockerRuntime(), web=c)
+			r = call(reg, "web_search", query="x")
+			assert r.ok == (status == 200), r
+			assert (r.output == "no results") if r.ok else str(status) in r.output
+		def timeout(req):
+			raise httpx.ReadTimeout("search timed out", request=req)
+		c = WebClient(api_key="k", provider=provider, mode="fast", fallback=False,
+		              http=httpx.Client(transport=httpx.MockTransport(timeout)))
+		r = call(build_registry(DockerRuntime(), web=c), "web_search", query="x")
+		assert not r.ok and "ReadTimeout" in r.output
+
+
+@case
+def t_brave_errors_fall_back_once_to_parallel_advanced():
+	for failure in (401, 429, 500, "timeout", "json", "schema", "missing_url", "missing_key"):
+		requests = []
+		def respond(req):
+			requests.append(req)
+			if str(req.url).startswith(web.BRAVE_URL):
+				assert req.headers["x-subscription-token"] == "brave-key"
+				assert "x-api-key" not in req.headers
+				if failure == "timeout":
+					raise httpx.ReadTimeout("timed out", request=req)
+				if failure == "json":
+					return httpx.Response(200, text="not JSON")
+				if failure == "schema":
+					return httpx.Response(200, json=[])
+				if failure == "missing_url":
+					return httpx.Response(200, json={"web": {"results": [{"title": "Broken"}]}})
+				return httpx.Response(failure)
+			assert str(req.url) == web.PARALLEL_URL
+			assert req.headers["x-api-key"] == "parallel-key"
+			assert "x-subscription-token" not in req.headers
+			assert json.loads(req.content) == {
+				"search_queries": ["original query"], "mode": "advanced", "max_chars_total": web.SEARCH_EXCERPT_CHARS,
+				"advanced_settings": {"max_results": 2, "source_policy": {"include_domains": ["example.com"]}},
+			}
+			return httpx.Response(200, json={"results": [{"title": "Fallback", "url": "https://example.com"}]})
+		with patch.dict(os.environ, {web.PARALLEL_KEY_ENV: "parallel-key", "PARALLEL_SEARCH_MODE": "fast"}, clear=True):
+			c = WebClient(api_key=None if failure == "missing_key" else "brave-key", provider="brave",
+			              http=httpx.Client(transport=httpx.MockTransport(respond)))
+			assert c.search("original query", limit=2, allowed_domains=["example.com"]) == [
+				SearchHit("Fallback", "https://example.com", "", "")]
+			assert len(requests) == (1 if failure == "missing_key" else 2)
+			assert c.provider == "brave"  # The next search still starts with Brave.
+
+
+@case
+def t_search_fallback_does_not_retry_success_or_chain_failures():
+	for status, parallel_key in ((200, "parallel-key"), (500, ""), (500, "parallel-key")):
+		requests = []
+		def respond(req):
+			requests.append(req)
+			return httpx.Response(status, json={})
+		with patch.dict(os.environ, {web.PARALLEL_KEY_ENV: parallel_key}):
+			c = WebClient(api_key="brave-key", provider="brave",
+			              http=httpx.Client(transport=httpx.MockTransport(respond)))
+			if status == 200:
+				assert c.search("x") == []
+			else:
+				assert "500" in raises(httpx.HTTPStatusError, c.search, "x")
+			assert len(requests) == (2 if status == 500 and parallel_key else 1)
 
 
 # -- extraction ---------------------------------------------------------------

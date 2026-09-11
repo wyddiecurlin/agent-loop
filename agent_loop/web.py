@@ -27,6 +27,9 @@ except ModuleNotFoundError:  # older openai SDKs ship plain httpx
 
 BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
 BRAVE_KEY_ENV = "BRAVE_SEARCH_API_KEY"
+PARALLEL_URL = "https://api.parallel.ai/v1/search"
+PARALLEL_KEY_ENV = "PARALLEL_SEARCH_API_KEY"
+SEARCH_EXCERPT_CHARS = 12_000
 USER_AGENT = "Mozilla/5.0 (compatible; agent-loop/0.1)"
 
 TIMEOUT_S = 30.0
@@ -237,22 +240,61 @@ class WebClient:
 	"""
 
 	def __init__(self, api_key: str | None = None, http: httpx.Client | None = None,
-	             extractor: Any = None):  # a providers.Provider; imported lazily below
+	             extractor: Any = None, *, provider: str | None = None, mode: str | None = None,
+	             fallback: bool = True):
+		# extractor is a providers.Provider; imported lazily below.
+		self.provider = provider or os.getenv("WEB_SEARCH_PROVIDER", "brave")
+		self.mode = mode or os.getenv("PARALLEL_SEARCH_MODE", "fast")
+		if self.provider not in ("brave", "parallel"):
+			raise ValueError("WEB_SEARCH_PROVIDER must be brave or parallel")
+		if self.provider == "parallel" and self.mode not in ("fast", "advanced"):
+			raise ValueError("PARALLEL_SEARCH_MODE must be fast or advanced")
 		self.api_key = api_key
+		self.fallback = fallback
 		self._http = http or httpx.Client(timeout=TIMEOUT_S, follow_redirects=False,
 		                                  headers={"User-Agent": USER_AGENT})
 		self._extractor = extractor
 
 	def search(self, query: str, limit: int = 8, allowed_domains: list[str] | None = None) -> list[SearchHit]:
-		key = self.api_key or os.getenv(BRAVE_KEY_ENV)
+		try:
+			return self._search(query, limit, allowed_domains)
+		except (httpx.HTTPError, RuntimeError, ValueError, KeyError, TypeError, AttributeError):
+			if not (self.provider == "brave" and self.fallback and os.getenv(PARALLEL_KEY_ENV)):
+				raise
+			# One attempt with separate credentials; empty Brave results are still success.
+			return WebClient(http=self._http, provider="parallel", mode="advanced", fallback=False)._search(
+				query, limit, allowed_domains)
+
+	def _search(self, query: str, limit: int, allowed_domains: list[str] | None) -> list[SearchHit]:
+		limit = max(1, min(limit, 20))
+		domains = [allowed_domains] if isinstance(allowed_domains, str) else allowed_domains
+		key_env = PARALLEL_KEY_ENV if self.provider == "parallel" else BRAVE_KEY_ENV
+		key = self.api_key or os.getenv(key_env)
 		if not key:
-			raise RuntimeError(f"{BRAVE_KEY_ENV} is not set in the environment or .env")
-		if allowed_domains:
-			domains = [allowed_domains] if isinstance(allowed_domains, str) else allowed_domains
+			raise RuntimeError(f"{key_env} is not set in the environment or .env")
+		if self.provider == "parallel":
+			settings = {"max_results": limit}
+			if domains:
+				settings["source_policy"] = {"include_domains": domains}
+			r = self._http.post(PARALLEL_URL, headers={"x-api-key": key}, json={
+				"search_queries": [query], "mode": self.mode,
+				"max_chars_total": SEARCH_EXCERPT_CHARS, "advanced_settings": settings,
+			})
+			r.raise_for_status()
+			results = r.json().get("results") or []
+			# Also bound locally: leave room for titles/URLs in the tool's 20K output.
+			remaining = SEARCH_EXCERPT_CHARS
+			hits = []
+			for x in results[:limit]:
+				snippet = "\n".join(x.get("excerpts") or [])[:remaining]
+				remaining -= len(snippet)
+				hits.append(SearchHit(x.get("title") or "", x["url"], snippet, x.get("publish_date") or ""))
+			return hits
+		if domains:
 			query += " " + " OR ".join(f"site:{d}" for d in domains)
 		r = self._http.get(
 			BRAVE_URL,
-			params={"q": query, "count": max(1, min(limit, 20)), "text_decorations": "false"},
+			params={"q": query, "count": limit, "text_decorations": "false"},
 			headers={"X-Subscription-Token": key, "Accept": "application/json"},
 		)
 		r.raise_for_status()

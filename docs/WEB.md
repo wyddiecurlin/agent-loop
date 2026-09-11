@@ -1,191 +1,63 @@
-# Web tools — search and fetch, as good as Claude Code's
+# Web search: Brave and Parallel
 
-Two tools, one seam, two test suites. The goal is that a task like *"find how torch.compile
-handles graph breaks"* is answered from the live web, with sources, in a handful of
-turns, by a 9B model with a 20K-char tool output cap.
+- Brave is the default behind `web_search`; errors fall back once to Parallel Advanced when its key is configured. Parallel can also be selected directly.
+- Compare Brave with Parallel Fast and Advanced on the same sourced-answer tasks; measure correctness, response time, context usage, and total cost.
+- Reuse the existing CLI and voice agent loop. Let Mimo and a browser voice client display cited answers through the shared gateway.
+- Keep `web_fetch` and its URL protections; ship after contract tests and the comparison pass. Defer crawling and a second research agent.
 
-```
-web_search(query, limit=8, allowed_domains=None)   -> ranked titles, URLs, snippets
-web_fetch(url, prompt=None)                        -> extracted answer, or a markdown preview + saved page
-```
+**Measured smoke result.** Five questions, three agent repeats per search variant, Qwen 3.5 9B: Brave produced 12/15 correct answers with cited support, Parallel Fast 10/15, and Advanced 13/15. Fast answered 12/15 correctly but two citations only established a SQLite build setting, not its default. Fast's estimated search fees were $0.016 versus Brave's $0.085, with similar median agent time (4.48s versus 4.65s). Brave had lower search latency and more accurate verbatim quotes. Keep Brave as the default pending broader coverage; Fast is available for cheaper searches. See the [full comparison and limitations](../evals/results/webqa_qwen.md) and [recorded results](../evals/results/webqa_qwen.json).
 
-Nothing else in V1. No crawl, no browser. The reasons are below.
+**Implementation.** [WebClient](../agent_loop/web.py) selects Brave or Parallel behind the same `SearchHit` representation. [Tool registration](../agent_loop/tools.py) continues to expose `web_search(query, limit, allowed_domains)` and `web_fetch(url, prompt)`. Fetch retains public-URL validation, bounded text reads, HTML conversion, and optional model extraction. There is no PDF reader or fetch cache. [Web tests](../tests/test_web.py) cover both search backends with fixtures.
 
-## What Claude Code actually does
+**Configuration.** Set `WEB_SEARCH_PROVIDER=brave|parallel` (default `brave`), `BRAVE_SEARCH_API_KEY`, `PARALLEL_SEARCH_API_KEY`, and `PARALLEL_SEARCH_MODE=fast|advanced` (default `fast`). Brave search errors (including HTTP failures, timeouts, invalid responses, and a missing Brave key) trigger one Parallel Advanced attempt if `PARALLEL_SEARCH_API_KEY` is set. Fallback preserves the query, limit, and domain restrictions and always uses Advanced, regardless of `PARALLEL_SEARCH_MODE`. Empty results do not trigger fallback. If Parallel also fails, the error reaches the agent; the next search starts with Brave again. The evaluator disables this fallback to keep provider scores isolated. The [launcher](../run.sh) reads `.env` and forwards shell overrides. Keys stay in trusted client code; the benchmark exposes no filesystem or shell tools.
 
-Read from `src/tools/WebFetchTool` and `src/tools/WebSearchTool` in the extracted
-source. The behaviour worth copying is not the tool list, it is the plumbing.
+Use `POST /v1/search`, `x-api-key`, `search_queries=[query]`, and explicit `mode=fast`; map title, URL, excerpts, and publication date to existing hits. Cap excerpt characters below the 20,000-character tool limit. Map `limit` and `allowed_domains` to `advanced_settings.max_results` and `advanced_settings.source_policy.include_domains`; this is a hard domain restriction. These are the current [API contract](https://docs.parallel.ai/api-reference/search/search) and [advanced settings](https://docs.parallel.ai/search/advanced-search-settings), checked September 10, 2026.
 
-| | Claude Code | why it matters here |
-|---|---|---|
-| search | Anthropic server-side `web_search` tool; model sees titles + URLs + a short summary | not available through vLLM/OpenAI-compatible APIs: we need our own provider |
-| fetch | GET, http→https, HTML→markdown (turndown), then **Haiku applies `prompt` to ≤100K chars** | the main model never sees the raw page; this is the whole context budget |
-| cache | 15-min LRU, 50MB | a small model repeats calls (`AgentRun.repeated_calls()` exists to count it) |
-| limits | 10MB body, 60s timeout, 10 redirect hops | a hung fetch is a lost task |
-| redirects | same-host followed; **cross-host returned to the model**, not followed | open-redirect defence, and the model learns where it actually went |
-| big results | >50K chars persisted to disk, model gets a 2KB preview + path | the model then greps the file instead of re-fetching |
-| docs domains | ~100 preapproved hosts returned raw when already markdown | boilerplate-free docs are cheap; everything else gets extracted |
-| prompt | tool description carries the current month/year; answer must end with `Sources:` | dates in queries, citations in answers |
-| crawl | none | Claude Code forages one page at a time and it is enough |
-| browser | optional MCP (Chrome extension / Playwright), gated behind a skill | acting on pages, not reading them |
+**Integration.** CLI and [voice bridge](../voice/bridge.py) use the same registry, so provider selection requires no changes there. This change covers search, fetch, and their evaluation; Task, Responses, Monitor, and new UI events are outside scope.
 
-## The proposed plan, evaluated
+**Decision gate.** Add fixtures for mapping, domain restrictions, empty results, timeout, quota errors, and missing credentials; run `AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_web`. Add ~30 live questions with independently checked answers and supporting URLs. Compare fixed model/step budgets, median/95th-percentile time, tokens, and search-plus-model cost. Switch only with no correctness regression and improved latency or cost. Parallel currently lists Fast at $1 and Advanced at $5 per 1,000 ten-result requests; published latency is vendor guidance, not a repo measurement. [Pricing](https://parallel.ai/pricing)
 
-**Keep.** The forage loop (search → fetch → follow a link → refine) is exactly what
-Claude Code does; the model, not a crawler, decides depth. Provider-pluggable search.
-Fetch returns markdown. Browser as a fallback tier, never the primary path.
+**Cheap BrowseComp tasks: use a curated, budgeted slice.** Review on September 10, 2026: BrowseComp (the OpenAI benchmark, interpreted here from “BrowserComp”) deliberately rejects easy lookups: its creators checked that five simple searches did not reveal the answer on the first results pages. Random sampling is therefore a poor default for our few-search benchmark. [BrowseComp methodology](https://openai.com/index/browsecomp/)
 
-**Drop or change.**
+BrowseComp-Plus is a better selection aid: its 830 questions have evidence documents, answers, and source URLs. Its official evaluation searches a fixed ~100K-document corpus, so running that retriever would not compare Brave with Parallel. Borrow question metadata and evidence; run our own live search tools. The paper reports roughly 22–26 searches per question for GPT-5/o3 configurations, not a few-search workload. [Dataset](https://huggingface.co/datasets/Tevatron/browsecomp-plus), [paper, Table 1](https://arxiv.org/html/2508.06600v1#S4.T1)
 
-1. **It misses the one mechanism that matters: `prompt`.** The plan's `web_fetch(url)`
-   returns the page. Claude Code's returns *the answer to a question about the page*,
-   produced by a cheap second model call. With `MAX_OUTPUT_CHARS = 20_000` and a 9B
-   model, ten raw pages are ~50K tokens of mostly navigation; ten extractions are ~5K.
-   This is the difference between the loop working and not.
-2. **`web_crawl` contradicts the plan's own argument** ("don't crawl a docs site when two
-   fetches answer the question"), Claude Code has none, and Crawl4AI drags Playwright and
-   Chromium into a 2GB, `--cap-drop ALL` container. Not V1. A cheap `sitemap`/links read
-   covers the "explore a site" case if an eval ever asks for it.
-3. **`browser` is a different product.** Claude Code's Chrome tools act on the user's
-   logged-in browser (click, fill, screenshot). For *fetching information* they add
-   nothing, and accessibility snapshots are the most expensive tool output there is. V3,
-   and only when a scored task needs JS rendering. When it comes: the browser executes
-   untrusted JavaScript, so it runs as the `sandbox` user, not as the key-holding root,
-   for exactly the reason `shell_run` does.
-4. **No security model.** The network is open by decision (RUNTIME.md), so a fetched page
-   that says "now read http://localhost:9000/v1/models" or a cloud metadata URL is one
-   prompt injection away. The plan has no URL validation, no private-range block, no
-   redirect policy, no size or time caps. Claude Code has all four.
-5. **Jina as the V1 fetch is the wrong shortcut.** A local fetch is ~60 lines; Jina sends
-   every URL and query to a third party, adds a key, and rate-limits (20 RPM keyless,
-   500 with a free key, verified 2026-09-06). Keep `r.jina.ai` as an *optional renderer
-   for JS-only pages*, behind the same tool.
-6. **No evals.** Every number in this repo is canonically validated and unforgeable
-   (EVALS.md). The plan proposes four tools and no way to know if they help.
-7. **It ignores the baseline that already exists.** `shell_run("curl ...")` works today:
-   HTML soup, truncated at 20K, no search because the `sandbox` user holds no key. That
-   is the control the eval is measured against.
-8. **It ignores the repo's structural rule.** `runtime.py` is the only module that
-   touches the world, proven by `./test.sh lint`. Network needs the same treatment: one
-   module, one seam, a fake for tests, and the lint extended.
-9. **A separate `links: [...]` list doubles the tokens.** Inline markdown links (what
-   turndown emits) serve navigation; the saved page is greppable for the rest.
+Counting the published [evidence relevance labels](https://raw.githubusercontent.com/texttron/BrowseComp-Plus/main/topics-qrels/qrel_evidence.txt) gives **30/830 questions with at most two labeled documents**: three with one (`30`, `266`, `655`) and 27 with two. These are candidate IDs, not certified easy tasks: document count measures labeled support, not searches required to discover it. The remaining two-document IDs are `67, 81, 113, 140, 244, 310, 317, 354, 356, 473, 495, 502, 549, 577, 682, 692, 715, 735, 742, 761, 790, 794, 853, 909, 1032, 1053, 1127`. Use this pool for a small bounded pilot; optionally prioritize successful low-call runs from the authors' [released trajectories](https://github.com/texttron/BrowseComp-Plus#-downloading-trajectory-data). Corpus trajectories are only a screening signal for live-web difficulty.
 
-Pricing in the plan is accurate as of today: Brave is $5 per 1,000 with $5 free credit
-monthly, i.e. ~1,000 searches/month free at 50 QPS. Enough for development and the eval.
+**Three concrete adaptations to start with.** Supplying a hidden entity or topic makes these ordinary sourced lookups. The references below use **zero-based row positions in the original [BrowseComp CSV](https://openaipublic.blob.core.windows.net/simple-evals/browse_comp_test_set.csv)**, decoded using the [official loader](https://github.com/openai/simple-evals/blob/main/browsecomp_eval.py); a crosswalk to Plus IDs has not been verified. These rewrites retain the original answer but change the task, so report them as `webqa/browsecomp-adapted`, never as official BrowseComp scores.
 
-## Design
+| Original row | Proposed task | Expected answer and supporting source | Search checked manually |
+|---|---|---|---|
+| 244 | Who is the first author of the 2017 study on extracting zinc from *Boletus badius* into simulated gastric fluid? | Jacek Rojowski — [PubMed](https://pubmed.ncbi.nlm.nih.gov/29624264/), [university record](https://ruj.uj.edu.pl/entities/publication/5bdcc737-8e41-426a-8aa5-98888c024a8f) | `Boletus badius zinc simulated gastric fluid extraction study lead author` |
+| 266 | What was the English title of the folklore exhibition curated by Joanna Kordjak at Zachęta that opened in October 2016? | Poland — a Country of Folklore? — [gallery exhibition record](https://zacheta.art.pl/en/wystawy/polska-kraj-folkloru) | `Zachęta 2016 exhibition Joanna Kordjak folklore` |
+| 790 | Which Jordanian rock band began its career with a cover of Abdel Halim Hafez's “Al Tobah”? | JadaL — [artist profile and recording](https://www.reverbnation.com//jadal/song/2487353-al-tobah-abd-el-haleem-hafez-cover) | `Jordanian band debut single El Tobah cover Abdul Halim Hafez` |
 
-### The seam: `web.py`
+Each listed query surfaced a relevant result in one manual search; checking sources took additional lookups. This was answer-aware curation using the research browser, not a blind agent run or a measurement of our providers. Original questions have not been demonstrated solvable within three searches. Qualify the rewrites through our actual `web_search`/`web_fetch` before admitting them. Prefer readable HTML: the current fetcher cannot read PDFs. The JadaL artist page returned a search excerpt but HTTP 403 on open; that candidate needs sufficient evidence in our provider's excerpt or an alternative readable source.
 
-```python
-class WebClient:                      # the only module that opens a socket
-    def search(self, query, limit, allowed_domains) -> list[SearchHit]
-    def fetch(self, url) -> Fetched | Redirected     # bytes -> markdown, cached, capped
+**Run contract.** Start with five qualified tasks for a smoke run, then include up to ten borrowed/adapted tasks within the planned 30-question suite. Keep original and adapted scores separate. Freeze the selection before provider comparison; do not retain only questions one provider wins.
 
-class SearchProvider(Protocol):       # BraveSearch first; SearXNG, Jina later
-    def search(self, query, limit, allowed_domains) -> list[SearchHit]
+- The [web evaluator](../evals/webqa.py) enforces **at most three search calls, two fetch calls, eight agent turns, and 60 seconds per task**. Each search sends one query and requests five results. Calls in the same model turn count separately; an attempted excess call ends the run. Network/model timeouts are clipped to the deadline, which also interrupts in-flight work. Model retries and provider fallback are disabled. Fetch extraction uses the same model with a 1,024-token output cap; agent turns use 2,048 tokens, with thinking disabled.
+- For provider isolation, replay one fixed, question-derived query per task with `limit=5`, then measure relevant-result presence and whether excerpts support the answer. Separately run the same model/prompt through each provider for sourced-answer accuracy within the budget. Keep answer keys and reference URLs out of the agent's inputs; supplied domains are a separately labeled test condition.
+- Grade an exact normalized answer or curated alias **and supporting evidence actually returned by a tool**. Accept equivalent supporting pages; Plus's document labels are incomplete for the live web. Record answer correctness, evidence support, tool errors, calls, elapsed time, tokens, and total cost separately. An unsupported correct guess does not pass. Run a no-web control to identify questions answered from model memory.
+- Require real source content: manual searches encountered pages echoing benchmark clues without evidence. Dataset mirrors, benchmark answers, and query-spam pages do not establish support. Store retrieved excerpts for auditing; allow deterministic aliases for cheap grading and review ambiguous evidence during curation.
+
+At the three-search cap, five tasks cost at most **$0.015 Fast / $0.075 Advanced** in search fees per provider; 30 tasks cost **$0.09 / $0.45**, excluding model/extraction costs and Brave fees. At 60 seconds each, five tasks have a five-minute sequential ceiling per provider; run that smoke set first. The full 30-task comparison across three providers has a 90-minute sequential ceiling, so keep it an explicit evaluation rather than the routine smoke test. These are budget calculations using [published search prices](https://parallel.ai/pricing), not measured runtimes or total bills.
+
+**Running the smoke benchmark.** [webqa.jsonl](../evals/data/webqa.jsonl) fixes the three adapted questions above plus two documentation lookups, with aliases, sources, validation dates, and upstream provenance. The standalone [evaluator](../evals/webqa.py) reuses the production agent loop, search, and fetch without changing the code-task harness. It runs fixed-query retrieval, a no-web control, then agent trials with rotating provider order. Its completion tool has explicit `answer` and `citations` fields for grading; search/fetch schemas are unchanged. Pass requires the normalized exact answer and at least one cited tool result containing the answer and task-specific evidence terms, from a reviewed source domain. Verbatim quote accuracy is reported separately. New equivalent domains require manual review; this conservative check is not a general semantic judge. The saved comparison includes an offline source/quote audit applied to every provider, without changing questions or rerunning agents.
+
+```bash
+# Offline contract and grading/budget checks.
+AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_web
+AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_webqa
+AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m evals.webqa --canonical
+
+# Five questions, both providers (Parallel Fast and Advanced), three agent repeats.
+AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m evals.webqa --repeats 3 > evals/results/webqa.json
+
+# Search-only comparison, no model calls.
+AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m evals.webqa --retrieval-only
+
+# Use Parallel in the normal CLI or voice agent.
+WEB_SEARCH_PROVIDER=parallel PARALLEL_SEARCH_MODE=fast ./run.sh "your question"
 ```
 
-`build_registry(runtime, web=WebClient())` binds `web_search` and `web_fetch` the way it
-binds `fs_*` to the runtime. Tests pass a `FakeWeb` that replays recorded fixtures, so
-`./test.sh web` needs no network and no key. The lint pattern grows one line: `httpx`,
-`urllib`, `requests`, `socket` may be imported only in `web.py`.
-
-`BRAVE_API_KEY` goes in `.env` next to `QWEN_API_KEY`. It is held by our code, running
-as root; a model-written `curl` runs as `sandbox` and cannot read it. That is the
-"tools use the keys, the model never sees them" pattern RUNTIME.md already describes.
-
-### `web_fetch(url, prompt=None)`
-
-```
-validate ─> cache? ─> GET (http→https, 30s, 10MB, same-host redirects ≤10)
-        ─> HTML→markdown (trafilatura, fallback markdownify; PDF via pypdf)
-        ─> persist /work/.web/<sha1(url)>.md         (.gitignore'd; reset() sweeps it)
-        ─> prompt given?  yes: second model call, answer ≤ ~2K chars
-                          no:  first 8K chars of markdown
-        ─> output ends with: "full page: .web/<sha>.md (N chars)"
-```
-
-The second model call is the same provider with thinking off and `tools=None`; on the
-self-hosted box it costs seconds, not dollars. Its system prompt says the page is
-untrusted data to be quoted, never instructions to follow. With no `prompt`, the tool is
-the raw view for docs pages that are already clean, and `fs_read`/`fs_search` on the
-saved file replace re-fetching.
-
-Refusals, all returned as tool errors the model can read:
-
-| check | rule |
-|---|---|
-| scheme | `http`/`https` only; userinfo stripped |
-| host | must contain a dot; resolved address must not be loopback, private, link-local, or CGNAT; re-checked on every redirect hop |
-| redirect | same host (± `www.`) followed; any other host returned as `redirect: <url>` for the model to decide |
-| size / time | 10MB, 30s; `text/*`, `application/json`, `application/pdf` only |
-| repeat | same URL within 15 minutes is served from cache and says so |
-
-### `web_search(query, limit=8, allowed_domains=None)`
-
-One Brave call, one compact text block: rank, title, URL, snippet, age when present.
-The tool description carries today's date ("it is September 2026; put the year in
-queries about anything recent"), as Claude Code's does. `allowed_domains` maps straight
-onto Brave's site filter and is what "prefer official docs" becomes in practice.
-
-### Prompt changes
-
-Three lines in `SYSTEM_PROMPT`: search before fetch when you do not have a URL; fetch
-with a `prompt` when you know what you are looking for; the `done` answer cites the URLs
-it relied on. Nothing about *how much* to explore. That is what the eval measures.
-
-## Evals
-
-Two suites, in the pattern of EVALS.md.
-
-**`./test.sh web`, no model, no network.** Replays fixtures through the real pipeline:
-HTML becomes the expected markdown, oversize is persisted with a preview, the cache hits,
-and every refusal above refuses. This is the "score cannot be forged" half.
-
-**`./evals.sh --dataset webqa`, live.** ~30 questions in `evals/data/webqa.jsonl`:
-`(question, expected substring, source domain)`. Pass needs both the answer *and* a cited
-URL from that domain that appears in the run's own `web_fetch` calls. A URL the model
-never fetched is not a source.
-
-Two controls before any number is believed:
-
-- **canonical**: a hand-written answer through the grader must pass, as with `--canonical`.
-- **no-tools**: run the set with web tools disabled. A question the model gets right from
-  its weights measures the weights, not the tools, and is dropped from the set.
-
-Report, per task: pass, steps, fetches, extractions, repeated calls, tokens, and
-scaffold-lost (provider 400s, refusals the model could not recover from). Baseline is the
-same set with only `shell_run`. The number that matters is not pass rate alone but
-**pass rate at a step budget**, because "found it in 40 fetches" is the failure mode the
-`prompt` parameter exists to prevent.
-
-## Later
-
-- **V2 renderers.** `r.jina.ai` as fallback when the markdown is empty or the page is a
-  JS shell; SearXNG (AGPL, its own container on the bridge) as a keyless `SearchProvider`.
-- **V2 site view.** `web_links(url)` returning `sitemap.xml` or the page's same-host links,
-  the cheap answer to "explore this docs site".
-- **V3 browser.** Playwright, only if a scored task needs it. Chromium as the `sandbox`
-  uid with `--no-sandbox` (no user namespaces under `--cap-drop ALL`),
-  `--disable-dev-shm-usage`, a page budget inside the 2GB limit, accessibility snapshots
-  rather than screenshots, and the lint extended again. The plan cites Microsoft's
-  Playwright MCP README as saying CLI + skills beat loading its schema for coding
-  agents (unverified here); it matches the deferred-schema pattern (`shouldDefer`)
-  Claude Code uses for both web tools.
-
-## Known traps
-
-- **`/work/.web/` is under snapshot/reset.** Intended: it is a cache. But `git add -A`
-  would commit it, so `setup()` writes `.web/` into `/work/.gitignore`. Add `.web` to
-  `SKIP_DIRS` too, or every `fs_search` of the repo also greps the saved pages.
-- **trafilatura drops code blocks on some docs pages.** Fall back to markdownify when
-  the extracted text is under a third of the raw text length; the eval will show which.
-- **The extraction model is the same 9B model.** A wrong extraction looks like a wrong
-  page. Log the raw page path with every extraction so a failed eval can be replayed.
-- **Brave's free credit is per month, not per run.** A runaway loop at 50 QPS spends it in
-  twenty seconds. Cap `web_search` at 20 calls per `agent_loop` run.
-- **DNS rebinding.** Validate the resolved IP and connect to *that* IP, or the check and
-  the connection can disagree. Good enough for a confused agent, not for an adversary,
-  which is the threat model RUNTIME.md already sets.
+The default is one agent repeat; `--limit` selects a prefix of the fixed five-task set. The larger 30-question suite remains future work. Report search list-price estimates separately from model costs: the repo cannot price self-hosted inference, and interrupted requests may incur unreported usage. Preserve full traces for source review. The original obfuscated corpus was not added to the repo; the inspected evidence-label file's SHA-256 is `a6f594975be57339de9e4e9f67f13c044f647feda77c0b84c45a1581e3041bd1`.
