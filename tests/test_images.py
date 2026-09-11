@@ -86,6 +86,45 @@ def live_tool():
 			print(json.dumps(result), flush=True)
 
 
+def live_formats(formats=("JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF", "PPM", "HEIF", "HEIC", "AVIF", "PDF")):
+	"""Send original encodings, bypassing image_view's JPEG conversion."""
+	image = Image.open(BytesIO(fixture("blue")))
+	payloads = {}
+	for fmt in formats:
+		out = BytesIO()
+		image.save(out, "HEIF" if fmt == "HEIC" else fmt)
+		mime = {"PPM": "image/x-portable-pixmap", "PDF": "application/pdf"}.get(fmt, f"image/{fmt.lower()}")
+		payloads[fmt.lower()] = f"data:{mime};base64," + base64.b64encode(out.getvalue()).decode()
+
+	def probe(pair):
+		name, alias = pair
+		spec = CATALOG[name][alias]
+		result = {"provider": name, "alias": alias, "model": spec.id, "formats": {}}
+		if not spec.vision:
+			result["rejected"] = "all image formats: endpoint does not support vision"
+			return result
+		provider = OpenAIProvider() if name == "openai" else ChatProvider(backend=name)
+		for fmt, url in payloads.items():
+			try:
+				turn = provider.generate([{"role": "user", "content": [
+					{"type": "input_text", "text": "What color is the rectangle? Reply with only the color."},
+					{"type": "input_image", "image_url": url, "detail": "low"}]}],
+					spec.id, None, thinking=False, max_output_tokens=1024, timeout=45)
+				result["formats"][fmt] = {"status": "accepted" if "blue" in (turn.text or "").lower() else "unverified", "answer": turn.text}
+			except Exception as exc:
+				rejected = getattr(exc, "status_code", None) == 400 and any(term in str(exc).lower() for term in (
+					"image format", "decode error", "cannot identify image", "unsupported mime type", "unsupported url scheme"))
+				result["formats"][fmt] = {"status": "rejected" if rejected else "unverified", "error": str(exc)[:600]}
+				if getattr(exc, "status_code", None) == 404:
+					break  # An unavailable endpoint cannot establish format support.
+		return result
+
+	pairs = [(name, alias) for name, models in CATALOG.items() for alias in models]
+	with ThreadPoolExecutor(max_workers=3) as pool:
+		for result in pool.map(probe, pairs):
+			print(json.dumps(result), flush=True)
+
+
 class ImagesTest(unittest.TestCase):
 	def test_together_qwen_request_requirements(self):
 		from tests.test_providers import FakeClient, StreamingClient
@@ -250,7 +289,9 @@ class ImagesTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-	if "--live-tool" in sys.argv:
+	if "--live-formats" in sys.argv:
+		live_formats()
+	elif "--live-tool" in sys.argv:
 		live_tool()
 	elif "--live" in sys.argv:
 		live()
