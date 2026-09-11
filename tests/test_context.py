@@ -90,7 +90,7 @@ class ResponseBudgetTests(unittest.TestCase):
             return ModelTurn(None, [call], Usage(input_tokens=100), 'tool_calls')
         registry = Mock()
         registry.schema.return_value = []
-        registry.execute.return_value = SimpleNamespace(ok=True, output='short answer', to_model_output=lambda: 'result')
+        registry.execute.return_value = SimpleNamespace(metadata={}, ok=True, output='short answer', to_model_output=lambda: 'result')
         history = [{'role': 'system', 'content': 'old rules'}, {'role': 'user', 'content': 'x' * 4000}]
         with patch.object(loop, 'generate', side_effect=generate), patch.object(loop, 'build_registry', return_value=registry):
             run = loop.agent_loop('new request', None, history=history, system_prompt='rules', verbose=False,
@@ -110,7 +110,7 @@ class ResponseBudgetTests(unittest.TestCase):
             return ModelTurn(None, [call], Usage(input_tokens=1800), 'tool_calls')
         registry = Mock()
         registry.schema.return_value = []
-        registry.execute.return_value = SimpleNamespace(ok=True, output='answer', to_model_output=lambda: 'x' * 1000)
+        registry.execute.return_value = SimpleNamespace(metadata={}, ok=True, output='answer', to_model_output=lambda: 'x' * 1000)
         history = [{'role': 'system', 'content': 'rules'}, {'role': 'user', 'content': 'old'}]
         with patch.object(loop, 'generate', side_effect=generate), patch.object(loop, 'build_registry', return_value=registry):
             run = loop.agent_loop('new', None, history=history, system_prompt='rules', verbose=False,
@@ -180,7 +180,7 @@ class TruncatedCallTests(unittest.TestCase):
         def execute(call):
             ok = call.id == 'c2'
             out = 'It is in weather.py and it ran.' if ok else "arguments for 'done' are not valid JSON"
-            return SimpleNamespace(ok=ok, output=out, to_model_output=lambda: out)
+            return SimpleNamespace(metadata={}, ok=ok, output=out, to_model_output=lambda: out)
         registry.execute.side_effect = execute
         with patch.object(loop, 'generate', side_effect=generate), patch.object(loop, 'build_registry', return_value=registry):
             run = loop.agent_loop('write me a program', None, system_prompt='rules', verbose=False, max_output_tokens=128)

@@ -267,6 +267,26 @@ class WebClient:
 			for x in results[:limit]
 		]
 
+	def image_bytes(self, url: str, max_bytes: int) -> bytes:
+		"""Download image inputs with the same URL and redirect policy as web_fetch."""
+		url = validate(url)
+		for _ in range(MAX_REDIRECTS):
+			with self._http.stream("GET", url) as response:
+				if response.is_redirect:
+					location = urljoin(url, response.headers.get("location", ""))
+					if not _same_host(url, location):
+						raise ValueError(f"image redirects to another host; use {location}")
+					url = validate(location)
+					continue
+				response.raise_for_status()
+				body = bytearray()
+				for chunk in response.iter_bytes(chunk_size=65_536):
+					body.extend(chunk)
+					if len(body) > max_bytes:
+						raise ValueError(f"image exceeds {max_bytes} bytes")
+				return bytes(body)
+		raise ValueError(f"image redirected more than {MAX_REDIRECTS} times")
+
 	def fetch(self, url: str) -> Fetched | Redirected:
 		url = validate(url)
 		for _ in range(MAX_REDIRECTS):

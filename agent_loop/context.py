@@ -8,6 +8,8 @@ from .providers import (
 	alias_for, default_model, model_spec, resolve_model,
 )
 
+IMAGE_TOKENS = 4096  # Conservative reserve for converter output at <=512px.
+
 
 def model_limits() -> tuple[int, int]:
 	provider = os.getenv("PROVIDER", DEFAULT_PROVIDER).lower()
@@ -46,7 +48,20 @@ class ContextBudget:
 	def size(messages, tools):
 		# Byte-based upper estimate handles CJK, JSON arguments, tool results and
 		# schemas without assuming the English-only four-characters-per-token rule.
-		return len(json.dumps([messages, tools], ensure_ascii=False).encode("utf-8")) + 256
+		# Converted images are <=512px; reserve vision tokens, not base64 characters.
+		images = 0
+		def without_payload(value):
+			nonlocal images
+			if isinstance(value, dict):
+				if value.get("type") == "input_image":
+					images += 1
+					return {"type": "input_image"}
+				return {key: without_payload(item) for key, item in value.items()}
+			if isinstance(value, list):
+				return [without_payload(item) for item in value]
+			return value
+		text = json.dumps(without_payload([messages, tools]), ensure_ascii=False)
+		return len(text.encode("utf-8")) + images * IMAGE_TOKENS + 256
 
 	def estimate(self, messages, tools):
 		size = self.size(messages, tools)
