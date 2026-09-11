@@ -4,6 +4,16 @@ function assert(value: unknown, message = "assertion failed"): asserts value {
   if (!value) throw new Error(message);
 }
 type Row = Record<string, unknown>;
+function record(value: unknown): Row {
+  assert(value !== null && typeof value === "object" && !Array.isArray(value));
+  return Object.fromEntries(Object.entries(value));
+}
+function grantResponse(value: unknown) {
+  const row = record(value);
+  const { session_id, user_id, token, expires_at } = row;
+  assert(typeof session_id === "string" && typeof user_id === "string" && typeof token === "string" && typeof expires_at === "string");
+  return { session_id, user_id, token, expires_at };
+}
 const alice = "11111111-1111-4111-8111-111111111111";
 const bob = "22222222-2222-4222-8222-222222222222";
 
@@ -23,9 +33,11 @@ function setup() {
         return Response.json({ id }, { status: [alice, bob].includes(id ?? "") ? 200 : 401 });
       }
       assert(request.headers.get("Authorization") === "Bearer server-key");
-      const body = request.method === "GET" ? null : await request.json();
+      const body = request.method === "GET" ? {} : record(await request.json());
       if (url.pathname === "/rest/v1/rpc/ivon_set_container_connection") {
-        const row = users.find((row) => row.id === body.owner_id)!;
+        const row = users.find((row) => row.id === body.owner_id);
+        assert(row);
+        assert(typeof body.connection_id === "string");
         const value = Object.fromEntries(Object.entries(row.container_connections ?? {}));
         if (body.connection === null) delete value[body.connection_id];
         else value[body.connection_id] = body.connection;
@@ -55,7 +67,7 @@ function setup() {
   async function issue(id = alice) {
     const result = await request("/sessions", "jwt-" + id, "POST");
     assert(result.status === 200);
-    return result.json();
+    return grantResponse(await result.json());
   }
   return { users, grants, calls, request, issue, advance: () => { time += 16 * 60 * 1000; } };
 }
@@ -79,7 +91,7 @@ Deno.test("credentials are encrypted, owner-bound, and fetched by one connection
   const grant = await test.issue();
   const fetched = await test.request("/connections/openai/credential", grant.token, "GET", undefined, grant.session_id);
   assert(fetched.status === 200);
-  assert((await fetched.json()).credential === "provider-secret");
+  assert(record(await fetched.json()).credential === "provider-secret");
   const other = await test.issue(bob);
   assert((await test.request("/connections/openai/credential", other.token, "GET", undefined, other.session_id)).status === 404);
   assert((await test.request("/connections/openai/credential", grant.token, "GET", undefined, other.session_id)).status === 401);
@@ -95,7 +107,7 @@ Deno.test("expiry, renewal, revocation, and independent sessions", async () => {
   const first = await test.issue();
   const second = await test.issue();
   assert((await test.request(`/sessions/${first.session_id}/renew`, "jwt-" + bob, "POST")).status === 404);
-  const renewed = await (await test.request(`/sessions/${first.session_id}/renew`, "jwt-" + alice, "POST")).json();
+  const renewed = grantResponse(await (await test.request(`/sessions/${first.session_id}/renew`, "jwt-" + alice, "POST")).json());
   assert((await test.request("/settings", first.token, "GET", undefined, first.session_id)).status === 401);
   assert((await test.request("/settings", renewed.token, "GET", undefined, renewed.session_id)).status === 200);
   assert((await test.request(`/sessions/${second.session_id}`, renewed.token, "DELETE", undefined, first.session_id)).status === 403);
@@ -115,7 +127,7 @@ Deno.test("existing Facebook connection and expired provider credentials", async
   assert((await test.request("/connections/facebook/credential", grant.token, "GET", undefined, grant.session_id)).status === 409);
   test.users[0].facebook_token_expires_at = null;
   const result = await test.request("/connections/facebook/credential", grant.token, "GET", undefined, grant.session_id);
-  assert((await result.json()).credential === "existing-facebook-secret");
+  assert(record(await result.json()).credential === "existing-facebook-secret");
   test.users[0].facebook_access_token = null;
   assert((await test.request("/connections/facebook/credential", grant.token, "GET", undefined, grant.session_id)).status === 404);
 });

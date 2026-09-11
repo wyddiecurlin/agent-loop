@@ -296,8 +296,8 @@ class DockerRuntime:
 			# Own process group, so a timeout can kill grandchildren too. Without this,
 			# subprocess's own timeout kills only the shell and leaves `npm test` running.
 			start_new_session=True,
-			# Drop to the sandbox user: uid, gid, and no supplementary groups. This needs
-			# CAP_SETUID/SETGID, which run.sh keeps; no-new-privileges blocks the way back.
+			# Session shells use the host UID/GID and the workspace group; disposable
+			# shells use sandbox. SETUID/SETGID and no-new-privileges enforce the drop.
 			user=int(os.getenv("AGENT_HOST_UID", str(self._sandbox.pw_uid))) if self._sandbox else None,
 			group=int(os.getenv("AGENT_HOST_GID", str(self._sandbox.pw_gid))) if self._sandbox else None,
 			extra_groups=[self._sandbox.pw_gid] if self._sandbox and self._control_socket else [] if self._sandbox else None,

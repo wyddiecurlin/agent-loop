@@ -29,7 +29,7 @@ New credentials use AES-256-GCM encryption with the user and connection IDs auth
 | `DELETE /connections/{id}` | Application | Remove a stored connection |
 | `GET /connections/{id}/credential` | Container | One credential, grant expiry, and provider expiry |
 
-Use connection IDs `openai`, `fireworks`, `together`, `qwen`, `brave`, and `parallel` for the built-in clients. Other IDs are available to trusted integrations through `runtime.credentials.credential(id)`. Manage the existing `facebook` connection through Ivon's current UI. Settings and connection writes are for an authenticated application client; raw credentials are never registered as model tools.
+Use connection IDs `openai`, `fireworks`, `together`, `qwen`, `brave`, and `parallel` for the built-in clients. Managed model calls use one provider by default; set `FALLBACK=together` explicitly if that user also has a Together connection. Other IDs are available to trusted integrations through `runtime.credentials.credential(id)`. Manage the existing `facebook` connection through Ivon's current UI. Settings and connection writes are for an authenticated application client; raw credentials are never registered as model tools.
 
 **Launch and lifetime.**
 
