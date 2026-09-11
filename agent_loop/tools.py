@@ -11,6 +11,7 @@ something we remember to arrange. The check that proves it, from the repo root:
 	./test.sh lint
 """
 
+import base64
 import fnmatch
 import json
 import posixpath
@@ -173,6 +174,26 @@ def _looks_binary(data: bytes) -> bool:
 # Every fs_/shell_ tool takes the Runtime as its first argument; build_registry
 # binds it. Nothing here reads or writes a file on its own.
 # ---------------------------------------------------------------------------
+
+def image_view(runtime: DockerRuntime, web: WebClient, source: str | bytes) -> ToolResult:
+	"""One input path for URLs, local files, and raw or base64-encoded bytes."""
+	from .images import MAX_INPUT_BYTES, convert
+	if isinstance(source, bytes):
+		data, label = source, "image bytes"
+	elif source.startswith(("https://", "http://")):
+		data, label = web.image_bytes(source, MAX_INPUT_BYTES), source
+	elif source.startswith("data:"):
+		header, separator, encoded = source.partition(",")
+		if not separator or not header.endswith(";base64") or len(encoded) > (MAX_INPUT_BYTES + 2) // 3 * 4:
+			raise ValueError("expected a bounded base64 data URL")
+		data, label = base64.b64decode(encoded, validate=True), "image bytes"
+	else:
+		data, label = runtime.read_bytes(source, max_bytes=MAX_INPUT_BYTES + 1), source
+	parts = convert(data)
+	count = sum(part["type"] == "input_image" for part in parts)
+	return ToolResult(True, f"Attached {count} compressed image(s) from {label}.",
+	                  {"attachments": [{"type": "input_text", "text": label}, *parts]})
+
 
 def fs_list(runtime: DockerRuntime, path: str = ".", recursive: bool = False, max_entries: int = 200) -> ToolResult:
 	st = runtime.stat(path)
@@ -446,6 +467,12 @@ def build_registry(runtime: DockerRuntime, allow: Iterable[str] | None = None,
 	today = f"{date.today():%B %Y}"
 
 	tools = [
+		Tool(
+			name="image_view",
+			description="View a photo or PDF from a URL, local path, or base64 data URL. Images are aggressively compressed; PDFs split into pages automatically.",
+			input_schema={"type": "object", "properties": {"source": {"type": "string"}}, "required": ["source"], "additionalProperties": False},
+			execute=partial(image_view, runtime, web),
+		),
 		Tool(
 			name=DONE_TOOL,
 			description=(

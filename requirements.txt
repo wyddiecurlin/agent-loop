@@ -1,2 +1,6 @@
 openai>=1.0.0
 python-dotenv>=1.0.0
+Pillow>=11.3.0
+pillow-heif>=1.0.0
+rawpy>=0.25.0
+pypdfium2>=4.30.0
