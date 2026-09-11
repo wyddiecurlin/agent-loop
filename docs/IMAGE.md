@@ -53,6 +53,36 @@ including retries and fallback; apply the stricter applicable limits. Unsupporte
 unverified endpoints must return an actionable tool error, not discard images or
 silently substitute a different model.
 
+`image_formats` lists native accepted encodings on each exact provider/model spec;
+`None` means the endpoint is unverified and `()` means no accepted image formats.
+`rejected_image_formats` lists confirmed rejections, with `"*"` meaning all formats.
+Formats absent from both lists remain unverified. Names are lowercase: `jpeg` includes
+JPG, `tiff` includes TIF, and `gif` means a single-frame image. These fields describe
+the image payload channel, not separate provider file APIs. `image_view` still accepts
+the source formats above and converts them to JPEG before sending; PDF pages are
+rendered, and RAW support comes from the converter.
+
+[Native format results](image-format-validation.jsonl), checked 2026-09-10, record
+original encodings sent directly to every reachable vision endpoint. Accepted probes
+must identify the blue rectangle; decoder/MIME rejections are recorded separately
+from endpoint failures. HEIF/HEIC probes use HEVC; other codecs and animated images
+remain unverified. The verified native capabilities are:
+
+| Provider / models | Accepted | Rejected |
+|---|---|---|
+| Fireworks: GLM 5.3 Flash, Kimi K3, Qwen 3.8 Max | JPEG, PNG, WebP, GIF, BMP, TIFF, PPM, HEIF, HEIC, AVIF | PDF |
+| Together: GLM 5.3 Flash, Kimi K3 | JPEG, PNG, WebP, GIF, BMP, TIFF, PPM | HEIF, HEIC, AVIF, PDF |
+| Together: Qwen 3.7 Plus | JPEG, PNG, WebP, GIF, BMP, TIFF, PPM, HEIF, HEIC, AVIF | PDF |
+| Local: Qwen 3.5 9B | JPEG, PNG, WebP, GIF, BMP, TIFF, PPM, AVIF | HEIF, HEIC, PDF |
+| OpenAI: GPT 5.4 Nano, GPT 5 Nano, GPT 5 Mini, GPT 5 | JPEG, PNG, WebP, GIF | BMP, TIFF, PPM, HEIF, HEIC, AVIF, PDF; RAW excluded by documented supported types |
+| Fireworks and Together: DeepSeek V4 Pro, DeepSeek V4 Flash, GLM 5.3; Together: Qwen 3.8 Max | None | All image formats (text-only endpoints) |
+| Fireworks: Qwen 3.7 Plus | Unverified (404) | Unverified |
+
+Native RAW encodings remain unverified outside OpenAI's documented exclusion and
+text-only endpoints. Fireworks accepts more encodings in these live probes than its
+guide lists; the spec records those observed capabilities. Together's capabilities
+vary by exact endpoint, so they must not be inferred from another model on the platform.
+
 **Provider research (2026-09-10).** These are serving constraints, not proof that every
 catalog entry supports vision. Finish exact-model verification before enabling it.
 
@@ -137,4 +167,5 @@ Run the checks inside the container:
 AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m unittest tests.test_images tests.test_context
 AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_images --live
 AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_images --live-tool
+AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_images --live-formats
 ```
