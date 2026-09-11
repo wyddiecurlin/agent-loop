@@ -43,6 +43,12 @@ from .tools import ToolCall
 
 DEFAULT_MODEL = "gpt-5.4-nano"  # the openai backend's pick: fastest TTFT (~0.67s), reasoning off
 DEFAULT_REASONING_EFFORT = "none"  # no reasoning tokens before the first output token
+QWEN_ENGLISH_ONLY = (
+	"OUTPUT LANGUAGE: ENGLISH ONLY. Always write your responses in English, including reasoning, preambles, summaries, "
+	"and user-facing text in tool arguments such as done(answer). "
+	"Use English even when the user or source material uses another language. "
+	"This overrides language-matching instructions. Preserve code, identifiers, and URLs exactly."
+)
 # 600s, not 60. A task's slowest single request grows with how many agents share the GPU:
 # at 24 concurrent containers a request queues behind the others, and a timeout there is
 # not a saved second - it is a retry, which costs the GPU the whole generation twice and
@@ -666,10 +672,29 @@ class ChatProvider:
 		if max_output_tokens is not None:
 			validate_output_tokens(max_output_tokens)
 		spec = model_spec(model, self.backend.name)
+		chat_messages = self._to_chat_messages(messages)
+		if self.backend.name == "qwen":
+			# Apply to every self-hosted call, including tool-less voice side calls.
+			system = next((m for m in reversed(chat_messages) if m["role"] == "system"), None)
+			if system is None:
+				chat_messages.insert(0, {"role": "system", "content": QWEN_ENGLISH_ONLY})
+			elif isinstance(system["content"], str):
+				system["content"] += "\n\n" + QWEN_ENGLISH_ONLY
+			else:
+				system["content"] = [*system["content"], {"type": "text", "text": QWEN_ENGLISH_ONLY}]
+			# Qwen can follow the latest input's language despite the system rule.
+			# Reinforce it beside that input, without changing stored conversation text.
+			user = next((m for m in reversed(chat_messages) if m["role"] == "user"), None)
+			reminder = "Write your response in English only, regardless of the language above."
+			if user is not None:
+				if isinstance(user["content"], str):
+					user["content"] += "\n\n" + reminder
+				else:
+					user["content"] = [*user["content"], {"type": "text", "text": reminder}]
 		extra_body: dict = {}
 		kwargs: dict = {
 			"model": model,
-			"messages": self._to_chat_messages(messages),
+			"messages": chat_messages,
 			"timeout": _env("AGENT_TIMEOUT_S", timeout),
 			"temperature": self.temperature,
 			"top_p": DEFAULT_TOP_P,

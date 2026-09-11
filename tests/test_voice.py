@@ -16,7 +16,7 @@ from agent_loop.loop import AgentRun, log
 from voice import bridge
 from voice.echo import EchoConfig, EchoGate
 from voice.turns import (
-	MAX_UTTERANCE_S, STATUS_LINES, TOO_LONG, TOOL_LINE, BargeIn, EndpointConfig, Endpointer, Narrator,
+	MAX_UTTERANCE_S, STATUS_LINES, TOO_LONG, TOOL_LINE, BargeIn, BargeInConfig, EndpointConfig, Endpointer, Narrator,
 	NarratorConfig, all_status_lines, frames, heard_text, speech_seconds, speech_text, speech_utterances,
 	split_sentences, spoken_answer, status_language, status_lines, tool_family, usable_transcript,
 )
@@ -35,18 +35,23 @@ def feed(ep: Endpointer, probs) -> list[tuple[int, str]]:
 
 
 def test_endpointer() -> bool:
+	# Exercise configurable timing with the original short endpoint. Production defaults
+	# and mid-sentence pauses are covered by test_voice_summary.
+	def endpoint(**kw):
+		return Endpointer(EndpointConfig(start_prob=0.5, start_frames=3, end_ms=600,
+		                                min_speech_ms=250, **kw))
 	ok = True
-	ev = feed(Endpointer(), [0.05] * 20 + [0.9] * 15 + [0.1] * 40)
+	ev = feed(endpoint(), [0.05] * 20 + [0.9] * 15 + [0.1] * 40)
 	ok &= check("a turn opens on the third speech frame", ev[0] == (22, "start"), str(ev))
 	ok &= check("speculates after 250 ms of silence", (35 + frames(250) - 1, "speculate") in ev, str(ev))
 	ok &= check("ends after 600 ms of silence", (35 + frames(600) - 1, "end") in ev, str(ev))
 	ok &= check("one event per phase", [e for _, e in ev] == ["start", "speculate", "end"], str(ev))
 
 	probs = [0.9] * 10 + [0.1] * frames(250) + [0.9] * 10 + [0.1] * frames(600)
-	kinds = [e for _, e in feed(Endpointer(), probs)]
+	kinds = [e for _, e in feed(endpoint(), probs)]
 	ok &= check("speech after a speculation speculates again", kinds == ["start", "speculate", "speculate", "end"], str(kinds))
 
-	ep, snap, final = Endpointer(), None, None
+	ep, snap, final = endpoint(), None, None
 	for p in probs:
 		e = ep.feed(p)
 		if e == "speculate" and snap is None:
@@ -56,7 +61,7 @@ def test_endpointer() -> bool:
 	ok &= check("speech_frames moves when speech resumed, so the early result is known stale",
 	            snap is not None and final is not None and final > snap, f"{snap} -> {final}")
 	probs = [0.9] * 10 + [0.1] * frames(600)
-	ep, snap, final = Endpointer(), None, None
+	ep, snap, final = endpoint(), None, None
 	for p in probs:
 		e = ep.feed(p)
 		if e == "speculate":
@@ -65,32 +70,32 @@ def test_endpointer() -> bool:
 			final = ep.speech_frames
 	ok &= check("and stays put when nothing more was said", snap == final, f"{snap} -> {final}")
 
-	ev = feed(Endpointer(), [0.9] * 4 + [0.05] * frames(600))
+	ev = feed(endpoint(), [0.9] * 4 + [0.05] * frames(600))
 	ok &= check("a 130 ms blip is aborted, not a turn", [e for _, e in ev] == ["start", "abort"], str(ev))
-	ev = feed(Endpointer(), [0.9, 0.9, 0.1, 0.9, 0.9, 0.1] * 5)
+	ev = feed(endpoint(), [0.9, 0.9, 0.1, 0.9, 0.9, 0.1] * 5)
 	ok &= check("two speech frames in a row never open a turn", ev == [], str(ev))
-	ev = feed(Endpointer(), [0.9] * 10 + [0.4] * 30)
+	ev = feed(endpoint(), [0.9] * 10 + [0.4] * 30)
 	ok &= check("hesitant frames between the thresholds keep the turn open", ev == [(2, "start")], str(ev))
 
 	# Someone can talk for a minute without a 600 ms gap in it. The buffer, the upload and
 	# the transcription all have to stop somewhere, so the turn does.
-	ev = feed(Endpointer(), [0.9] * (frames(60_000) + 200))
+	ev = feed(endpoint(), [0.9] * (frames(60_000) + 200))
 	ok &= check("a turn nobody ends is taken as said at sixty seconds",
 	            ev[:2] == [(2, "start"), (frames(60_000) - 1, "end")], str(ev[:2]))
 	ok &= check("and the speaker carries straight on into the next one", ev[2] == (1877, "start"), str(ev))
-	ev = feed(Endpointer(EndpointConfig(max_turn_ms=1000)), [0.9] * 10 + [0.1] * 5 + [0.9] * 40)
+	ev = feed(endpoint(max_turn_ms=1000), [0.9] * 10 + [0.1] * 5 + [0.9] * 40)
 	ok &= check("the pauses inside a turn count towards its cap too",
 	            ev[:2] == [(2, "start"), (frames(1000) - 1, "end")], str(ev))
 	return ok
 
 
 def test_bargein() -> bool:
-	b = BargeIn()
+	b = BargeIn(BargeInConfig(prob=0.6, sustain_ms=250))
 	ok = check("silence while playing never barges", not any(b.feed(0.1, True) for _ in range(50)))
 	hits = [i for i in range(10) if b.feed(0.9, True)]
 	ok &= check("sustained speech while playing barges once, at 250 ms", hits == [frames(250) - 1], str(hits))
-	ok &= check("speech while we are silent is not a barge-in", not any(BargeIn().feed(0.9, False) for _ in range(20)))
-	b = BargeIn()
+	ok &= check("speech while we are silent is not a barge-in", not any(BargeIn(BargeInConfig(prob=0.6, sustain_ms=250)).feed(0.9, False) for _ in range(20)))
+	b = BargeIn(BargeInConfig(prob=0.6, sustain_ms=250))
 	ok &= check("a gap resets the run", not any(b.feed(p, True) for p in [0.9] * 5 + [0.2] + [0.9] * 5))
 	return ok
 
