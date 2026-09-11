@@ -99,18 +99,25 @@ test. The current catalog matrix is:
 
 **Validation recorded with this change.** [Per-endpoint results](image-validation.jsonl)
 cover all 19 exact catalog IDs on 2026-09-10 (PDT), with fallback disabled to isolate
-each provider. Eight endpoints passed red/blue image probes and the streamed
+each provider. Eleven endpoints passed red/blue image probes and the streamed
 `image_view` → `done` flow: Fireworks GLM 5.3 Flash, Kimi K3, Qwen 3.8 Max; local Qwen;
-and all four OpenAI models. Each also passed at its operating batch size (four
+all four OpenAI models; and Together GLM 5.3 Flash, Kimi K3, Qwen 3.7 Plus.
+Each also passed at its operating batch size (four
 images locally, eight on the hosted endpoints). These tests do not establish the
 provider's absolute maximum; those limits come from the cited documentation. Blind prompts sometimes guessed a color, so changing the
 actual image from red to blue was also required to verify visual input affected the
 answer. Fireworks DeepSeek Pro/Flash and GLM 5.3 rejected images; Fireworks Qwen 3.7
-Plus returned 404. All seven Together pairs remain unverified without
-`TOGETHER_API_KEY`. Together Kimi K3 has documented vision support and a provisional
-one-image operating cap; the other Together entries remain disabled for images until
-verified. A configured fallback with unverified vision support also prevents image
-requests; use `FALLBACK=none` to select the verified primary alone.
+Plus returned 404. With credentials configured, Together's two DeepSeek endpoints,
+GLM 5.3, and Qwen 3.8 Max also explicitly rejected images. All seven Together pairs
+were verified; its three vision endpoints use a tested eight-image operating cap,
+while their absolute maximum remains unverified in the reviewed documentation. Unsupported endpoints have a
+zero-image limit. A configured fallback that cannot accept images also prevents image
+requests; use `FALLBACK=none` to select a vision-capable primary alone.
+
+Together Qwen 3.7 Plus requires streaming: the adapter collects its stream into the
+same `ModelTurn` when callers request a non-streamed result, including PDF summaries.
+Together Qwen 3.8 Max accepts only `low`, `medium`, and `xhigh` reasoning effort;
+the catalog now records that ladder independently of Fireworks.
 
 The local launch script was checked: it sets four images per prompt, reflected in the
 local model spec. Keep that spec in sync when changing the deployment. Offline tests
@@ -120,6 +127,8 @@ samples from [rawpy's test collection](https://github.com/letmaik/rawpy/tree/mai
 converted to 21,285 and 6,967 bytes respectively, with a 512-pixel longest edge. A
 live nine-page PDF test on local Qwen correctly identified pages 2, 5, and 9 across
 automatic batches.
+A nine-page PDF also passed on Qwen 3.7 Plus through the actual Fireworks 404 fallback:
+Together served four calls, including both page-summary batches, and returned `2, 5, 9`.
 Compaction itself remains planned; this change documents its image-removal contract.
 
 Run the checks inside the container:

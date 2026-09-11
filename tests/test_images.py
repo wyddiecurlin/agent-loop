@@ -51,7 +51,8 @@ def live():
 				                          thinking=False, max_output_tokens=1024, timeout=45)
 				result["blind_answer"] = blind.text
 		except Exception as exc:
-			result.update(status="unsupported" if "does not support image" in str(exc) else "unverified", error=str(exc)[:500])
+			unsupported = any(text in str(exc) for text in ("does not support image", "Multimodal not supported"))
+			result.update(status="unsupported" if unsupported else "unverified", error=str(exc)[:500])
 		finally:
 			CATALOG[name][alias] = spec
 		return result
@@ -86,6 +87,22 @@ def live_tool():
 
 
 class ImagesTest(unittest.TestCase):
+	def test_together_qwen_request_requirements(self):
+		from tests.test_providers import FakeClient, StreamingClient
+		client = StreamingClient('{"path":"a.txt","content":"hello"}')
+		callback = Mock()
+		turn = ChatProvider("together", client=client).generate("hello", CATALOG["together"]["qwen-3.7-plus"].id, None, on_tool_call=callback)
+		self.assertTrue(client.seen["stream"])
+		callback.assert_not_called()
+		self.assertEqual(json.loads(turn.tool_calls[0].arguments), {"path": "a.txt", "content": "hello"})
+		client = FakeClient()
+		provider = ChatProvider("together", client=client)
+		for thinking, effort in ((False, "low"), (True, "xhigh")):
+			provider.generate("hello", CATALOG["together"]["qwen-3.8-max"].id, None, thinking=thinking)
+			self.assertEqual(client.seen["reasoning_effort"], effort)
+		ChatProvider("fireworks", client=client).generate("hello", CATALOG["fireworks"]["qwen-3.7-plus"].id, None)
+		self.assertNotIn("stream", client.seen)
+
 	def test_wire_formats(self):
 		from tests.test_providers import FakeClient
 		part, = convert(fixture())
@@ -104,8 +121,9 @@ class ImagesTest(unittest.TestCase):
 		from tests.test_providers import pair, status_error
 		fallback, client = pair(status_error(503))
 		part, = convert(fixture())
-		with self.assertRaisesRegex(ValueError, "at most 1"):
-			fallback.generate([{"role": "user", "content": [part, part]}], CATALOG["fireworks"]["kimi-k3"].id, None)
+		with patch.dict(CATALOG["together"], {"kimi-k3": replace(CATALOG["together"]["kimi-k3"], max_images=1)}):
+			with self.assertRaisesRegex(ValueError, "at most 1"):
+				fallback.generate([{"role": "user", "content": [part, part]}], CATALOG["fireworks"]["kimi-k3"].id, None)
 		self.assertFalse(client.seen)
 
 	def test_image_estimate_ignores_base64_length(self):
