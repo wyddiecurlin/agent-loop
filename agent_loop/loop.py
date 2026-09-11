@@ -29,6 +29,7 @@ from .providers import (
 	TRACKER,
 	default_model,
 	make_provider,
+	close_provider,
 	with_retries,
 )
 
@@ -217,22 +218,31 @@ def agent_loop(
 	if history and messages[0].get("role") == "system":
 		messages[0] = system  # the date may have changed since the conversation started
 	current_start = len(messages)
-	messages.append(Message(role='user', content=prompt))
+	if prompt is not None:
+		messages.append(Message(role='user', content=prompt))
 	history_cleared = False
 
 	def finish_run(reason, steps, error=""):
+		runtime.checkpoint(messages, continuing=reason in ("mount", "interrupted"),
+		                   interactive=runtime.conversation.get("interactive", False))
 		return AgentRun(messages, reason, steps, error, history_cleared)
 
 
 	stalled = 0
 	for step in range(1, max_steps + 1):
+		if runtime.stop_requested:
+			return finish_run("interrupted", step - 1)
 		trace(f"[LOG] step {step}/{max_steps} ({len(messages)} items in context)")
+		managed_provider = None
 		try:
+			if runtime.credentials:
+				managed_provider = make_provider(credential=runtime.credentials.credential)
 			if context_budget is not None:
 				if context_budget.prepare(messages, registry.schema(), current_start, max_output_tokens):
 					current_start = 1
 					history_cleared = True
 			turn = generate(
+				**({"provider": managed_provider} if managed_provider else {}),
 				messages=messages,
 				tools=registry.schema(),
 				tool_choice="required",
@@ -247,6 +257,9 @@ def agent_loop(
 		except Exception as exc:  # noqa: BLE001
 			log(f"[ERROR] generate failed at step {step}: {type(exc).__name__}: {exc}")
 			return finish_run("error", step - 1, f"{type(exc).__name__}: {exc}")
+		finally:
+			if managed_provider:
+				close_provider(managed_provider)
 		trace(json.dumps(asdict(turn), indent=2))
 
 		# potentially stalled agent
@@ -285,6 +298,11 @@ def agent_loop(
 			# call in the turn still runs, so no function_call is left without an output.
 			if call.name == DONE_TOOL and result.ok:
 				answer = result.output
+		if runtime.mount_pending:
+			return finish_run("mount", step)
+		if runtime.stop_requested:
+			return finish_run("interrupted", step)
+		runtime.checkpoint(messages, interactive=runtime.conversation.get("interactive", False))
 		if answer is not None:
 			messages.append(Message(role='assistant', content=answer))
 			return finish_run("done", step)

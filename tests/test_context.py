@@ -9,6 +9,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from agent_loop.runtime import DockerRuntime
 from agent_loop.context import ContextBudget, model_limits
 from agent_loop.loop import AgentRun
 from agent_loop.providers import ChatProvider, OpenAIProvider, ModelTurn, Usage, ToolCall, resendable, resendable_arguments
@@ -93,7 +94,7 @@ class ResponseBudgetTests(unittest.TestCase):
         registry.execute.return_value = SimpleNamespace(ok=True, output='short answer', to_model_output=lambda: 'result')
         history = [{'role': 'system', 'content': 'old rules'}, {'role': 'user', 'content': 'x' * 4000}]
         with patch.object(loop, 'generate', side_effect=generate), patch.object(loop, 'build_registry', return_value=registry):
-            run = loop.agent_loop('new request', None, history=history, system_prompt='rules', verbose=False,
+            run = loop.agent_loop('new request', DockerRuntime(), history=history, system_prompt='rules', verbose=False,
                                   max_output_tokens=128, context_budget=ContextBudget('auto-clear', window=3000))
         self.assertTrue(run.ok)
         self.assertTrue(run.history_cleared)
@@ -113,7 +114,7 @@ class ResponseBudgetTests(unittest.TestCase):
         registry.execute.return_value = SimpleNamespace(ok=True, output='answer', to_model_output=lambda: 'x' * 1000)
         history = [{'role': 'system', 'content': 'rules'}, {'role': 'user', 'content': 'old'}]
         with patch.object(loop, 'generate', side_effect=generate), patch.object(loop, 'build_registry', return_value=registry):
-            run = loop.agent_loop('new', None, history=history, system_prompt='rules', verbose=False,
+            run = loop.agent_loop('new', DockerRuntime(), history=history, system_prompt='rules', verbose=False,
                                   max_output_tokens=128, context_budget=ContextBudget('auto-clear', window=3000))
         self.assertTrue(run.ok)
         self.assertTrue(run.history_cleared)
@@ -183,7 +184,7 @@ class TruncatedCallTests(unittest.TestCase):
             return SimpleNamespace(ok=ok, output=out, to_model_output=lambda: out)
         registry.execute.side_effect = execute
         with patch.object(loop, 'generate', side_effect=generate), patch.object(loop, 'build_registry', return_value=registry):
-            run = loop.agent_loop('write me a program', None, system_prompt='rules', verbose=False, max_output_tokens=128)
+            run = loop.agent_loop('write me a program', DockerRuntime(), system_prompt='rules', verbose=False, max_output_tokens=128)
         self.assertTrue(run.ok)
         self.assertEqual(run.answer, 'It is in weather.py and it ran.')
         self.assertEqual(len(requests), 2)

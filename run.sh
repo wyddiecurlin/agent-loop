@@ -13,6 +13,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+if [ "${AGENT_SESSION:-0}" = 1 ]; then
+	exec python3 -m launcher.main "$@"
+fi
+
 TARGET=${AGENT_TARGET:-dev}          # dev | test: the Dockerfile stage
 IMAGE=agent-loop:$TARGET
 
@@ -31,7 +35,7 @@ opts=(--rm --init
 # voice/bridge.py this way); a pseudo-terminal only when there is a terminal at both ends.
 opts+=(--interactive)
 if [ -t 0 ] && [ -t 1 ]; then opts+=(--tty); fi
-if [ -f .env ]; then opts+=(--env-file .env); fi
+if [ -f "${AGENT_ENV_FILE:-.env}" ]; then opts+=(--env-file "${AGENT_ENV_FILE:-.env}"); fi
 # Anything set in the caller's shell wins over .env, so a provider A/B is a prefix on the
 # command rather than an edit to a secrets file:  PROVIDER=qwen ./evals.sh --dataset ...
 for v in PROVIDER FALLBACK MODEL REASONING_EFFORT MAX_OUTPUT_TOKENS CONTEXT_WINDOW_TOKENS \

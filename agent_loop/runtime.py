@@ -22,6 +22,12 @@ anywhere outside this file - `./test.sh lint` proves it.
 """
 
 import os
+import json
+import socket
+import re
+import ctypes
+from contextlib import contextmanager
+from functools import wraps
 import pwd
 import shutil
 import signal
@@ -30,6 +36,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping
+
+from .credentials import CredentialClient, CredentialError, Grant
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +85,14 @@ CONTAINER_ROOT = "/work"
 UNSAFE_HOST = "AGENT_UNSAFE_HOST"
 
 
+def mounted_filesystem(method):
+	@wraps(method)
+	def execute(self, path=".", *args, **kwargs):
+		with self._mount_identity(path):
+			return method(self, path, *args, **kwargs)
+	return execute
+
+
 class DockerRuntime:
 	"""What a tool is allowed to ask of the outside world, from inside the container.
 
@@ -88,7 +104,15 @@ class DockerRuntime:
 	"""
 
 	def __init__(self, root: str | Path = CONTAINER_ROOT,
-	             env_allowlist: Iterable[str] = DEFAULT_ENV_ALLOWLIST):
+	             env_allowlist: Iterable[str] = DEFAULT_ENV_ALLOWLIST, *, credential_http=None):
+		self._credential_http = credential_http
+		self.credentials: CredentialClient | None = None
+		self._control_socket = os.getenv("AGENT_CONTROL_SOCKET")
+		self._mounts: list[dict] = []
+		self.mount_pending = False
+		self.stop_requested = False
+		self.in_turn = False
+		self.conversation = {"messages": [], "continue": False, "interactive": False}
 		self.root = Path(root).resolve()
 		self._env_allowlist = tuple(env_allowlist)
 		# On a host with AGENT_UNSAFE_HOST there is no such user and no privilege to drop.
@@ -111,6 +135,22 @@ class DockerRuntime:
 				"Launch it with ./run.sh. To override deliberately, set "
 				f"{UNSAFE_HOST}=1 - that removes the only boundary there is."
 			)
+		if self._control_socket:
+			info = self._control("info")
+			self._mounts = info["mounts"]
+			self.conversation = info["conversation"]
+			url = os.getenv("AGENT_CREDENTIAL_URL")
+			if url:
+				self.credentials = CredentialClient(url, self._read_grant, http=self._credential_http)
+				settings = self.credentials.settings()
+				for key, env in {"provider": "PROVIDER", "model": "MODEL", "timezone": "TZ", "web_search_provider": "WEB_SEARCH_PROVIDER"}.items():
+					if key in settings:
+						os.environ.setdefault(env, settings[key])
+			else:
+				from dotenv import load_dotenv
+				load_dotenv("/run/agent-loop/private/live/credentials/environment")
+		if "TZ" in os.environ:
+			time.tzset()
 		self.root.mkdir(parents=True, exist_ok=True)
 		os.umask(0o002)  # what the agent writes, the sandbox user can edit (shared group)
 		if not (self.root / ".git").exists():
@@ -124,7 +164,8 @@ class DockerRuntime:
 				raise RuntimeError(f"could not initialise {self.root}: {r.stderr.strip()}")
 
 	def teardown(self) -> None:
-		"""No-op: the container's death is the teardown, and it takes /work with it."""
+		if self.credentials:
+			self.credentials.close()
 
 	def __enter__(self) -> "DockerRuntime":
 		self.setup()
@@ -133,12 +174,87 @@ class DockerRuntime:
 	def __exit__(self, *exc) -> None:
 		self.teardown()
 
+	def _control(self, op: str, **payload) -> dict:
+		if not self._control_socket:
+			raise RuntimeError("This operation requires the session launcher")
+		with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+			connection.settimeout(30)
+			connection.connect(self._control_socket)
+			connection.sendall(json.dumps({"op": op, **payload}).encode() + b"\n")
+			with connection.makefile("rb") as reader:
+				response = json.loads(reader.readline(64 * 1024 * 1024))
+		if not response.get("ok"):
+			raise RuntimeError(response.get("error", "Launcher operation failed"))
+		return response["result"]
+
+	def _read_grant(self) -> Grant:
+		try:
+			self._control("refresh_grant")
+			with Path("/run/agent-loop/private/live/credentials/grant.json").open() as handle:
+				value = json.loads(handle.read(32768))
+			if value["session_id"] != os.environ["AGENT_SESSION_ID"] or not re.fullmatch(r"ivon_container_[A-Za-z0-9_-]{43}", value["token"]):
+				raise ValueError()
+			return Grant(value["session_id"], value["token"])
+		except Exception:
+			raise CredentialError("Container grant unavailable; supply a valid grant through the launching client") from None
+
+	def mount_volume(self, host_path: str, read_only: bool = True) -> str:
+		result = self._control("mount", host_path=host_path, read_only=read_only)
+		self.mount_pending = result["pending"]
+		return result["path"]
+
+	def checkpoint(self, messages: list, *, continuing: bool = False, interactive: bool = False) -> None:
+		if self._control_socket:
+			self.conversation = {"messages": messages, "continue": continuing, "interactive": interactive}
+			self._control("checkpoint", state=self.conversation)
+
+	def install_signal_handlers(self) -> None:
+		def stop(signum, frame):
+			self.stop_requested = True
+			if not self.in_turn:
+				raise KeyboardInterrupt()
+		for sig in (signal.SIGINT, signal.SIGTERM):
+			signal.signal(sig, stop)
+
+	@contextmanager
+	def _mount_identity(self, path: str):
+		candidate = Path(path) if os.path.isabs(path) else self.root / path
+		try:
+			candidate = candidate.resolve()
+		except PermissionError:
+			pass
+		mounted = any(candidate == Path(m["container_path"]) or Path(m["container_path"]) in candidate.parents for m in self._mounts)
+		if not mounted:
+			yield
+			return
+		# Linux filesystem IDs are per-thread. The host owner's permissions apply to
+		# mounted data without changing the process identity or granting DAC_OVERRIDE.
+		libc = ctypes.CDLL(None)
+		uid = int(os.environ["AGENT_HOST_UID"])
+		gid = int(os.environ["AGENT_HOST_GID"])
+		old_gid = libc.setfsgid(gid)
+		old_uid = libc.setfsuid(uid)
+		try:
+			if libc.setfsuid(-1) != uid or libc.setfsgid(-1) != gid:
+				raise PermissionError("Cannot assume mount owner's filesystem identity")
+			yield
+		finally:
+			libc.setfsuid(old_uid)
+			libc.setfsgid(old_gid)
+
 	# -- paths --------------------------------------------------------------
 
-	def _resolve(self, path: str) -> Path:
+	@mounted_filesystem
+	def _resolve(self, path: str, *, write: bool = False) -> Path:
 		p = Path(path).resolve() if os.path.isabs(path) else (self.root / path).resolve()
 		if p != self.root and self.root not in p.parents:
-			raise PermissionError(f"{path!r} is outside the working directory {self.root}")
+			for mount in self._mounts:
+				root = Path(mount["container_path"])
+				if p == root or root in p.parents:
+					if write and mount["read_only"]:
+						raise PermissionError("Mounted folder is read-only")
+					return p
+			raise PermissionError(f"{path!r} is outside the working directory and mounted folders")
 		return p
 
 	def relpath(self, path: str) -> str:
@@ -182,9 +298,9 @@ class DockerRuntime:
 			start_new_session=True,
 			# Drop to the sandbox user: uid, gid, and no supplementary groups. This needs
 			# CAP_SETUID/SETGID, which run.sh keeps; no-new-privileges blocks the way back.
-			user=self._sandbox.pw_uid if self._sandbox else None,
-			group=self._sandbox.pw_gid if self._sandbox else None,
-			extra_groups=[] if self._sandbox else None,
+			user=int(os.getenv("AGENT_HOST_UID", str(self._sandbox.pw_uid))) if self._sandbox else None,
+			group=int(os.getenv("AGENT_HOST_GID", str(self._sandbox.pw_gid))) if self._sandbox else None,
+			extra_groups=[self._sandbox.pw_gid] if self._sandbox and self._control_socket else [] if self._sandbox else None,
 		)
 		timed_out = False
 		try:
@@ -218,11 +334,13 @@ class DockerRuntime:
 
 	# -- filesystem ---------------------------------------------------------
 
+	@mounted_filesystem
 	def stat(self, path: str) -> FileStat | None:
 		"""FileStat for `path`, or None if it does not exist."""
 		p = self._resolve(path)
 		return self._stat(p) if p.exists() else None
 
+	@mounted_filesystem
 	def list_dir(self, path: str = ".", *, recursive: bool = False,
 	             skip: Iterable[str] = (), max_entries: int = 200) -> list[FileStat]:
 		"""At most `max_entries` entries. Ask for one more than you need to detect truncation."""
@@ -250,6 +368,7 @@ class DockerRuntime:
 					return entries
 		return entries
 
+	@mounted_filesystem
 	def read_bytes(self, path: str, *, max_bytes: int | None = None) -> bytes:
 		p = self._resolve(path)
 		if not p.is_file():
@@ -260,18 +379,22 @@ class DockerRuntime:
 	def read_text(self, path: str) -> str:
 		return self.read_bytes(path).decode("utf-8", errors="replace")
 
+	@mounted_filesystem
 	def write(self, path: str, content: str | bytes) -> None:
 		"""Write `path`, creating parent directories."""
-		p = self._resolve(path)
+		p = self._resolve(path, write=True)
 		p.parent.mkdir(parents=True, exist_ok=True)
 		if isinstance(content, str):
 			p.write_text(content, encoding="utf-8")
 		else:
 			p.write_bytes(content)
 
+	@mounted_filesystem
 	def remove(self, path: str) -> None:
 		"""Delete a file or tree. Missing paths are not an error."""
-		p = self._resolve(path)
+		p = self._resolve(path, write=True)
+		if any(p == Path(m["container_path"]) for m in self._mounts):
+			raise PermissionError("Refusing to remove a mount root")
 		if p == self.root:
 			raise PermissionError("refusing to remove the runtime root")
 		if p.is_dir():
@@ -309,6 +432,8 @@ class DockerRuntime:
 		being inside the container is what makes this method possible at all.
 		"""
 		target = snapshot or "main"
+		if not re.fullmatch(r"main|[0-9a-f]{40,64}", target):
+			raise ValueError("Invalid workspace snapshot")
 		r = self.run(f"git reset -q --hard {target} && git clean -qfdx")
 		if not r.ok:
 			raise RuntimeError(f"reset failed: {r.stderr.strip()}")
