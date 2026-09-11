@@ -375,3 +375,19 @@ reserved and does nothing for now. Tests:
 ```sh
 AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m unittest tests.test_context -v
 ```
+
+## Long replies and room-noise tuning
+
+Long final answers now get a bounded, tool-less summary call before speech. The bridge
+keeps the original `text` and history and sends the shorter version as `spoken`; the
+client's `--max-answer-s` budget applies to the summary. Short answers make no extra
+call. If summarization fails or exceeds the budget, the existing screen-only fallback
+remains. Self-hosted Qwen requests require English for answers, reasoning, preambles,
+and summaries; the voice client also uses English status lines and synthesis.
+
+The shared endpoint waits 1,500 ms of silence, so a one-second thinking pause does not
+dispatch a turn. Starting speech requires five consecutive 32 ms frames at probability
+0.65; interruption requires 350 ms at 0.7. The mobile foreground filter defaults to
+RMS 0.012 (previously 0.006), preserving its soft-syllable lookahead and hangover.
+`MIMO_FOREGROUND_MIN_RMS` still overrides this level. These thresholds reduce background
+pickup; they do not identify a particular speaker.

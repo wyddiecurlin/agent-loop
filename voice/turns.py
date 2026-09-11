@@ -77,12 +77,12 @@ def frames(ms: int) -> int:
 
 @dataclass
 class EndpointConfig:
-	start_prob: float = 0.5    # a frame this likely to be speech opens a turn ...
-	start_frames: int = 3      # ... once three in a row agree (~100 ms), so a click does not
+	start_prob: float = 0.65   # require clearer speech before opening a turn ...
+	start_frames: int = 5      # ... sustained for 160 ms, to reject brief background bursts
 	end_prob: float = 0.35     # below this a frame is silence: hysteresis against flutter
 	speculate_ms: int = 250    # silence at which the transcription is fired early
-	end_ms: int = 600          # silence that closes the turn
-	min_speech_ms: int = 250   # anything shorter is a cough or a chair
+	end_ms: int = 1500         # leave room to think mid-sentence before dispatching
+	min_speech_ms: int = 300   # anything shorter is a cough or a chair
 	max_turn_ms: int = 60_000  # the longest turn we will hold before taking what we have
 
 
@@ -144,8 +144,8 @@ class Endpointer:
 
 @dataclass
 class BargeInConfig:
-	prob: float = 0.6          # stricter than start_prob: a little of our own voice leaks back in
-	sustain_ms: int = 250      # this long before we stop talking; a cough does not cut us off
+	prob: float = 0.7          # stricter than start_prob: a little of our own voice leaks back in
+	sustain_ms: int = 350      # sustained foreground speech before interrupting playback
 	gap_ms: int = 0            # optional total unvoiced time within the evidence window
 
 

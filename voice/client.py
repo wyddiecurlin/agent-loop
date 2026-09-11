@@ -47,6 +47,7 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -312,9 +313,9 @@ class Speech:
 		else:
 			say(f"{BOLD}agent>{RESET} {text}")  # preserve code and formatting in the text answer
 			if spoken != text:
-				dim("  (too long to read out; it is above in full)")
+				dim("  (speaking a shorter version; full answer above)")
 		t0 = time.monotonic()
-		log("speak", what=self.kind, text=spoken, truncated=spoken != text)
+		log("speak", what=self.kind, text=spoken, display_text=text, truncated=spoken != text)
 		try:
 			tts.speak(spoken, self.speaker, self.cancel, sentences=self.sentences,
 			          on_sentence=lambda s: log("tts.sentence", after_s=round(time.monotonic() - t0, 3), text=s))
@@ -406,8 +407,8 @@ def main(argv: list[str] | None = None) -> int:
 	ap.add_argument("--no-narration", action="store_true",
 	                help="no fillers or hold lines from the client; the agent's preamble and answers only")
 	ap.add_argument("--max-answer-s", type=float, default=MAX_SPOKEN_S,
-	                help="answers longer than this are left on screen instead of read out")
-	ap.add_argument("--endpoint-ms", type=int, default=600, help="silence that ends your turn")
+	                help="answers longer than this are summarized for speech; full text stays on screen")
+	ap.add_argument("--endpoint-ms", type=int, default=EndpointConfig().end_ms, help="silence that ends your turn")
 	ap.add_argument("--max-turn-ms", type=int, default=60_000, help="longest turn held before it is taken as said")
 	ap.add_argument("--mic", default=None, help="input device name or index")
 	ap.add_argument("--speaker", default=None, help="output device name or index")
@@ -492,7 +493,13 @@ def run(args, ap) -> int:
 		if ev.get("type") == "exit":
 			say(f"the agent did not start (exit {ev.get('code')})")
 			return 1
-	agent.send({"type": "clock", "tz": host_timezone()})
+	agent.send({"type": "clock", "tz": host_timezone(), "max_answer_s": args.max_answer_s})
+	if ev.get("provider") == "qwen":
+		spoken_status = "en"
+		language = "English"
+		tts.profile = replace(tts.profile, language=language)
+		tts.config = {**tts.config, "language": language}
+		clips.profile = replace(clips.profile, language=language)
 	mic = Mic(args.mic)  # macOS asks for microphone permission here, once per terminal app
 	for kind, dev in (("input", args.mic), ("output", args.speaker)):
 		try:
@@ -610,10 +617,10 @@ def run(args, ap) -> int:
 					if not ev.get("ok"):
 						dim(f"  agent error: {text}")
 						text = "I hit a problem. The details are in the terminal."
-					# The whole answer is printed either way; only what is said out loud is
-					# cut, and the listener is told where the rest of it is.
+					# The bridge summarizes long answers; retain the local guard if it fails.
 					answer_lang = spoken_status or status_language(text)
-					to_speak.append(("answer", text, spoken_answer(text, answer_lang, args.max_answer_s)))
+					spoken = (ev.get("spoken") or text) if ev.get("ok") else text
+					to_speak.append(("answer", text, spoken_answer(spoken, answer_lang, args.max_answer_s)))
 					if pending:
 						submit(pending.popleft())
 				elif kind == "exit":
