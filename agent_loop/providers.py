@@ -134,6 +134,7 @@ class Model:
 	max_images: int | None = None  # 0: unsupported; None: maximum not published/verified
 	vision: bool = False
 	image_batch: int = 1  # conservative operating cap, distinct from the provider maximum
+	streaming_only: bool = False
 
 
 # Effort ladders, named once so the tables below stay readable.
@@ -157,15 +158,15 @@ CATALOG: dict[str, dict[str, Model]] = {
 		"qwen-3.8-max":     Model("accounts/fireworks/models/qwen3p8-max",      2.00, 0.25,  6.00, _TOGGLEABLE, _M, max_images=30, vision=True, image_batch=8),
 	},
 	"together": {
-		"deepseek-v4-pro":  Model("deepseek-ai/DeepSeek-V4-Pro-0813",   1.32, 0.13, 3.96, _TOGGLEABLE, _M),
-		"deepseek-v4-flash": Model("deepseek-ai/DeepSeek-V4-Flash-0731", 0.14, 0.03, 0.28, _TOGGLEABLE, _M),
-		"glm-5.3":          Model("zai-org/GLM-5.3",                    1.40, 0.26, 4.40, _ALWAYS_ON,  _M, 32_768),
-		"glm-5.3-flash":    Model("zai-org/GLM-5.3-Flash",              0.15, 0.03, 0.50, _ALWAYS_ON,  _M, 32_768),
-		"kimi-k3":          Model("moonshotai/Kimi-K3",                 3.00, 0.30, 15.00, _ALWAYS_ON, _M, 32_768, vision=True),
+		"deepseek-v4-pro":  Model("deepseek-ai/DeepSeek-V4-Pro-0813",   1.32, 0.13, 3.96, _TOGGLEABLE, _M, max_images=0),
+		"deepseek-v4-flash": Model("deepseek-ai/DeepSeek-V4-Flash-0731", 0.14, 0.03, 0.28, _TOGGLEABLE, _M, max_images=0),
+		"glm-5.3":          Model("zai-org/GLM-5.3",                    1.40, 0.26, 4.40, _ALWAYS_ON,  _M, 32_768, max_images=0),
+		"glm-5.3-flash":    Model("zai-org/GLM-5.3-Flash",              0.15, 0.03, 0.50, _ALWAYS_ON,  _M, 32_768, vision=True, image_batch=8),
+		"kimi-k3":          Model("moonshotai/Kimi-K3",                 3.00, 0.30, 15.00, _ALWAYS_ON, _M, 32_768, vision=True, image_batch=8),
 		# No cached-input rate is published for either Qwen; billed here at the full input
 		# rate, which over-states the cost rather than under-stating it.
-		"qwen-3.7-plus":    Model("Qwen/Qwen3.7-Plus",                  0.32, 0.32, 1.28, _TOGGLEABLE, 1_000_000),
-		"qwen-3.8-max":     Model("Qwen/Qwen3.8-2.4T-A95B",             2.00, 0.25, 6.00, _TOGGLEABLE, _M),
+		"qwen-3.7-plus":    Model("Qwen/Qwen3.7-Plus",                  0.32, 0.32, 1.28, _TOGGLEABLE, 1_000_000, vision=True, image_batch=8, streaming_only=True),
+		"qwen-3.8-max":     Model("Qwen/Qwen3.8-2.4T-A95B",             2.00, 0.25, 6.00, ("low", "medium", "xhigh"), _M, max_images=0),
 	},
 	# Self-hosted vLLM on the local box: the GPU is already paid for, so per-token is 0.
 	"qwen": {
@@ -708,6 +709,9 @@ class ChatProvider:
 			validate_output_tokens(max_output_tokens)
 		validate_images(messages, model, self.backend.name)
 		spec = model_spec(model, self.backend.name)
+		if spec and spec.streaming_only and not stream:
+			stream = True
+			on_text = on_tool_call = None  # Collect internally for non-streaming callers.
 		extra_body: dict = {}
 		kwargs: dict = {
 			"model": model,
