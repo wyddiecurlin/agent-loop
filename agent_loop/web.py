@@ -1,4 +1,4 @@
-"""Web search and fetch: the only module that opens a socket on its own (docs/WEB.md).
+"""Trusted web search and fetch clients (docs/WEB.md).
 
 Search is one call to Brave's Web Search API. Fetch is a GET, HTML to markdown, and -
 when the caller says what it is looking for - a second call to the self-hosted model

@@ -86,7 +86,7 @@ class Credentials(unittest.TestCase):
 
 class RuntimeGrantDelivery(unittest.TestCase):
     def test_protected_delivery_rotation_and_backend_revocation(self):
-        from launcher.main import Session, ControlServer, ControlHandler, atomic_json
+        from launcher.main import Session, ControlServer, ControlHandler, atomic_json, read_grant
         session_id = "11111111-1111-4111-8111-111111111111"
         active_token = "ivon_container_" + "a" * 43
         requests = []
@@ -101,6 +101,9 @@ class RuntimeGrantDelivery(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='grant-') as temporary:
             directory = Path(temporary)
             source = directory / 'source.json'
+            atomic_json(source, {"token": "broken"})
+            with self.assertRaises(ValueError):
+                read_grant(source)
             atomic_json(source, {"session_id": session_id, "token": active_token})
             session = Session(directory, {"session_id": session_id}, source, 'https://credentials.example')
             mounted = Path('/run/agent-loop/private/live')

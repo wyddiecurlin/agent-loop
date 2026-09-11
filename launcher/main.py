@@ -4,6 +4,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import shutil
 import signal
 import socketserver
@@ -54,11 +55,17 @@ def valid_id(value: str) -> str:
 
 
 def read_grant(path: Path) -> dict:
-    value = json.loads(path.read_text())
-    valid_id(value["session_id"])
-    if not isinstance(value.get("token"), str) or not value["token"].startswith("ivon_container_"):
-        raise ValueError("Invalid container grant file")
-    return value
+    try:
+        with path.open() as handle:
+            value = json.loads(handle.read(32768))
+        if not isinstance(value, dict) or not isinstance(value.get("session_id"), str):
+            raise ValueError()
+        valid_id(value["session_id"])
+        if not isinstance(value.get("token"), str) or not re.fullmatch(r"ivon_container_[A-Za-z0-9_-]{43}", value["token"]):
+            raise ValueError()
+        return value
+    except (ValueError, TypeError, KeyError):
+        raise ValueError("Invalid container grant file") from None
 
 
 def backend(url: str, grant: dict, path: str, method: str = "GET") -> dict:
