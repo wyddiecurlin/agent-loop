@@ -1,27 +1,47 @@
 # Per-user settings and credentials
 
-For v1, the client launching an agent-loop container must hold a short-lived token for that user's session. The container uses it to fetch the user's settings, API keys, and existing connections through a backend backed by Supabase. OAuth setup and provider-token refresh are out of scope; use credentials already stored for the user.
-
-**Flow.**
-
-1. The authenticated client requests a session. The backend derives the user from existing application authentication, creates a session ID, and returns a random opaque bearer token bound to that user and session. Proposed lifetime: 15 minutes.
-2. The client supplies the token before launching the container. The launcher delivers it to trusted runtime code through a protected temporary mounted file outside `/work`, excluded from snapshots. Keep it out of command arguments and saved container configuration.
-3. The runtime calls the backend over HTTPS to read settings, list connections, or fetch a credential by connection ID. On every request, the backend checks the token hash, expiry, revocation, session binding, and connection ownership. The token determines the user; callers cannot supply another `user_id`. Return only the requested data, never the full user row.
+The launching client obtains a 15-minute container grant, saves the response to a private JSON file, and supplies that file to `agent-loop`. Trusted runtime code uses the grant to fetch the user's settings and credentials through the `container-access` backend. OAuth setup and provider-token refresh remain out of scope.
 
 ```text
-Authenticated client -> backend: create session, receive token
-Client -> launcher -> container runtime: session ID + token
-Container runtime -> backend -> Supabase: fetch user's credential
+Authenticated client -> container-access: create session, receive grant
+Client -> launcher -> protected runtime file: session ID + token
+Trusted provider/tool -> container-access -> ops: fetch one credential
 ```
 
-**Storage.** Use `public.ivon_users` in the **ops Supabase project** for per-user settings, API keys, provider tokens, and connection metadata. A connection needs an ID, provider, account label, credential, and optional expiry. Reuse existing columns where possible; encrypt credential values with a backend-managed key outside the database.
+**Storage and authentication.** The ops Supabase project (`ftlvnvrzsukhsjgeqebl`) owns `public.ivon_users` and `public.ivon_container_grants`. The [migration](../supabase/migrations/202609100001_container_credentials.sql) adds `container_settings` and `container_connections` JSON objects to the existing user row. Grants contain `session_id`, `user_id`, a SHA-256 hash of a random 256-bit token, expiry, revocation, and creation time. Each session has one current grant, so renewal invalidates its previous token without affecting other sessions.
 
-Store container grants in `public.ivon_container_grants` in ops with `user_id`, `session_id`, `token_hash`, `expires_at`, and `revoked_at`. Store only token hashes. Separate grants support concurrent sessions and independent revocation without replacing the user's application API token. Exact schema additions require inspection of the existing ops table.
+The [backend](../supabase/functions/container-access/service.ts) verifies an existing Supabase user JWT or Ivon application API token when issuing, renewing, or resuming grants. It derives ownership from that authentication. Container requests instead carry their opaque grant and `X-Session-ID`; they cannot issue grants, renew themselves, or modify connections. Supabase service-role access stays in the backend, which checks ownership explicitly. Database grants/RLS block direct client access to user secrets and container grants. See [Supabase function authentication](https://supabase.com/docs/guides/functions/auth) and [RLS](https://supabase.com/docs/guides/database/postgres/row-level-security).
 
-Only the backend accesses secret columns and grants. Keep Supabase secret/service-role keys there, with explicit ownership checks because they bypass RLS. Use database grants and RLS to block direct client access to secrets. See [Supabase API keys](https://supabase.com/docs/guides/getting-started/api-keys) and [RLS](https://supabase.com/docs/guides/database/postgres/row-level-security).
+New credentials use AES-256-GCM encryption with the user and connection IDs authenticated alongside the ciphertext. The encryption key stays in the backend's `IVON_CREDENTIAL_KEY` secret. The existing Facebook connection is available as `facebook`, using the current Ivon columns and expiry. Existing Facebook and application API tokens retain their current storage format for compatibility with Ivon; this migration does not convert those legacy values.
 
-**Lifetime.** The authenticated client obtains and delivers replacement grants for longer sessions; the container token cannot renew itself. Expired or revoked grants deny further lookups. Pause credential-dependent work if renewal is unavailable, revoke grants at session end, and require a fresh grant on resume. Grant expiry does not invalidate provider credentials already fetched.
+**API.** Paths below are relative to `/functions/v1/container-access`. All requests require `Authorization: Bearer <credential>`. Container requests also require `X-Session-ID`. Responses disable caching.
 
-**Runtime boundary.** Trusted tools keep fetched credentials in memory, dropping them when the grant expires or revocation is detected. Preserve the shell environment allowlist and sandbox-user separation. Keep secrets out of tool results, prompts, logs, memory records, and snapshots. [SESSIONS.md](SESSIONS.md) owns container persistence; this plan owns credential storage and access.
+| Method and path | Caller | Result |
+|---|---|---|
+| `POST /sessions` | Application | `{session_id, user_id, token, expires_at}` |
+| `POST /sessions/{id}/renew` | Application owner | Replacement grant for an unrevoked session |
+| `POST /sessions/{id}/resume` | Application owner | Fresh grant, including for a previously ended session |
+| `DELETE /sessions/{id}` | Application owner or that session's grant | Revoke the grant |
+| `GET /settings` | Application or container | User ID and nonsecret settings |
+| `PUT /settings` | Application | Replace settings: `timezone`, `provider`, `model`, `web_search_provider` |
+| `GET /connections` | Application or container | Connection IDs, providers, account labels, and expiry |
+| `PUT /connections/{id}` | Application | Store `{provider, account_label, credential, expires_at?}` |
+| `DELETE /connections/{id}` | Application | Remove a stored connection |
+| `GET /connections/{id}/credential` | Container | One credential, grant expiry, and provider expiry |
 
-**Delivery.** Implement backend issuance/lookup, launcher token delivery, then runtime credential loading. Verify cross-user/session denial, expiry/revocation, concurrent sessions, renewal/resume, unavailable provider credentials, and secret isolation from shell access and snapshots. This is proposed work; the current launcher still loads a shared `.env`.
+Use connection IDs `openai`, `fireworks`, `together`, `qwen`, `brave`, and `parallel` for the built-in clients. Other IDs are available to trusted integrations through `runtime.credentials.credential(id)`. Manage the existing `facebook` connection through Ivon's current UI. Settings and connection writes are for an authenticated application client; raw credentials are never registered as model tools.
+
+**Launch and lifetime.**
+
+```bash
+./agent-loop --grant-file /private/session-grant.json \
+  --backend-url https://ftlvnvrzsukhsjgeqebl.supabase.co/functions/v1/container-access
+```
+
+The client renews before expiry and atomically replaces its grant file with the response. Before each lookup, the launcher reads the latest file, checks its session ID, and updates the protected runtime file. Each outbound model request and search performs a new credential lookup. Missing, expired, or revoked credentials fail closed; an authenticated client must renew before retrying. Grant expiry cannot invalidate a provider credential already sent to a provider.
+
+The launcher revokes the grant at session end. Resume requires the application's `/resume` response for the same session ID. Credentials live outside `/work`, in a protected mount excluded from Docker snapshots. The model's shell uses a separate user and an environment allowlist. Provider keys stay out of SDK configuration, model tools, logs, prompts, conversation state, and saved container configuration.
+
+**Deployment.** Apply the migration to ops, configure a base64-encoded 32-byte `IVON_CREDENTIAL_KEY` as an Edge Function secret, then deploy `container-access` with the supplied [function configuration](../supabase/config.toml). The function uses Supabase's injected `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. Preserve the encryption key across deployments. The repository contains deployment artifacts; no remote migration or function deployment is performed by the launcher.
+
+**Validation.** Run `./test.sh credentials` for the handler, PostgreSQL migration/permissions, and runtime grant delivery tests. [SESSIONS.md](SESSIONS.md) covers container persistence and its real Docker tests. `./run.sh` and explicit `./agent-loop --local` retain `.env` credentials for local development.
