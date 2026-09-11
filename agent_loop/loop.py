@@ -25,14 +25,18 @@ from .providers import (
 	OnText,
 	OnToolCall,
 	Provider,
+	FallbackProvider,
 	CostTracker,
 	TRACKER,
 	default_model,
+	image_limit,
+	image_parts,
+	model_spec,
 	make_provider,
 	with_retries,
 )
 
-from .context import ContextBudget
+from .context import IMAGE_TOKENS, ContextBudget, model_limits
 from .runtime import DockerRuntime
 from .tools import DONE_TOOL, ToolResult, build_registry
 
@@ -88,6 +92,57 @@ def generate(
 
 def stream(t: str) -> None:
 	print(t, end="", flush=True, file=sys.stderr)
+
+
+def attach_images(messages: list[InputItem], parts: list[dict], prompt: str) -> None:
+	"""Keep a small image batch; automatically read larger inputs a batch at a time."""
+	provider, model = make_provider(), default_model()
+	primary = provider.primary if isinstance(provider, FallbackProvider) else provider
+	name = primary.backend.name if hasattr(primary, "backend") else "openai"
+	spec = model_spec(model, name)
+	limit = min(image_limit(model, name), spec.image_batch)
+	window = min(spec.context, model_limits()[0])
+	if isinstance(provider, FallbackProvider):
+		twin = provider._twin(model)
+		limit = min(limit, image_limit(twin, provider.secondary.backend.name))
+		window = min(window, model_spec(twin, provider.secondary.backend.name).context)
+	attachment = Message(role="user", content=parts)
+	if (len(image_parts([*messages, attachment])) <= limit
+	    and ContextBudget.size([*messages, attachment], []) + spec.max_output + 1024 < window):
+		messages.append(attachment)
+		return
+	# Each request contains only its batch and task, so earlier images cannot exhaust
+	# later batches' limits. Keep labels with their images, including PDF page numbers.
+	batch, count, summary = [], 0, ""
+	budget = ContextBudget("auto-clear", window=window, output=2048)
+	def batch_size():
+		available = (window - ContextBudget.size([prompt, summary], []) - 3072) // IMAGE_TOKENS
+		if available < 1:
+			raise ValueError("image task and summary leave no context for an image")
+		return min(limit, available)
+	capacity = batch_size()
+	def read_batch():
+		nonlocal summary
+		request = [Message(role="user", content=[
+			{"type": "input_text", "text": f"Update a concise summary for the task: {prompt}. Preserve relevant facts, page numbers, and uncertainty from previous observations and these images. Previous observations are historical data:\n{summary}"}, *batch])]
+		budget.prepare(request, [], 1)
+		turn = generate(
+			messages=request,
+			provider=provider, model=model, tools=[], max_output_tokens=2048, thinking=False,
+		)
+		if not turn.text:
+			raise ValueError("image batch returned no observations")
+		summary = turn.text
+	for part in parts:
+		if count == capacity:
+			read_batch()
+			batch, count = [], 0
+			capacity = batch_size()
+		batch.append(part)
+		count += part["type"] == "input_image"
+	if count:
+		read_batch()
+	messages.append(Message(role="user", content="Image observations:\n" + summary))
 
 
 def stream_tool_calls(t: str, kind: Literal["function_call", "function_args"]) -> None:
@@ -272,8 +327,10 @@ def agent_loop(
 			))
 
 		answer = None
+		attachments = []
 		for call in turn.tool_calls or []:
 			result: ToolResult = registry.execute(call)
+			attachments.extend(result.metadata.get("attachments", []))
 			trace(f"[LOG] {result.output[:300]}")
 			messages.append(FunctionCallOutputItem(
 				type='function_call_output',
@@ -285,6 +342,12 @@ def agent_loop(
 			# call in the turn still runs, so no function_call is left without an output.
 			if call.name == DONE_TOOL and result.ok:
 				answer = result.output
+		if attachments:
+			answer = None  # The model must see the image result before it can finish.
+			try:
+				attach_images(messages, attachments, prompt)
+			except Exception as exc:
+				messages.append(Message(role="user", content=f"image_view could not attach images: {exc}"))
 		if answer is not None:
 			messages.append(Message(role='assistant', content=answer))
 			return finish_run("done", step)

@@ -1,209 +1,171 @@
-# Image input — vision in the loop
+# Image input — image_view
 
-One seam, two tools, one converter. The goal is that *"what is wrong in this screenshot?"*
-and *"compare these three photos"* work on a HEIC off a phone and a CR2 off a camera, on
-the same six models the text loop already runs on.
+One `image_view(source)` tool for image understanding, with a shared converter and
+small changes to the existing tool registry, loop, and provider adapters.
+Face recognition and client integration (including Mimo) are out of scope.
 
-```
-./run.sh --image a.heic --image b.jpg "which one is sharper?"   session-level
-image_view(paths, prompt=None)                                  agent-initiated
-pdf_read(path, pages=None)                                      one image per page
-```
+**Inputs.** Accept a URL, a local path, or bytes. The Python entry point accepts `bytes`;
+the JSON tool accepts a base64 data URL (`data:image/jpeg;base64,...`). Fetch URLs before conversion so remote
+images obey the same compression policy as files. Runtime owns local reads; reuse the
+web client's URL validation, redirect checks, timeouts, and bounded downloads. Detect
+formats from decoded content rather than trusting filenames or HTTP content types.
 
-No image generation, no video, no OCR tier, no face recognition.
+**Conversion.** Convert common photo formats: JPEG, PNG, WebP, GIF (first frame), BMP,
+TIFF, HEIC/HEIF, AVIF, and camera RAW (including DNG, CR2/CR3, NEF, ARW, and RAF where
+the decoder supports them). Use Pillow with HEIF support and a LibRaw-backed decoder;
+keep conversion in memory. Correct orientation, flatten transparency, remove metadata,
+and emit JPEG. Reject corrupt inputs and unsupported camera variants with a useful
+error; bound encoded input, decoded dimensions, and PDF rendering work.
 
-## The one hard constraint
+Optimize for recognizing image content rather than inspecting individual pixels.
+Always aggressively compress inputs over **500 KB (500,000 bytes)**: start at a
+512-pixel longest edge and JPEG quality 40, then lower quality and dimensions until
+output is at most **50 KB**. Apply the dimension cap to smaller inputs too, since a
+small encoded file can still have large dimensions. Never enlarge a small image.
+Compression alone does not determine vision
+token cost: resizing and the model's supported low-detail mode also matter. Do not
+silently retry at full resolution.
 
-**A tool result cannot carry an image.** `FunctionCallOutputItem.output` is a string, and
-neither the Responses API nor Chat Completions accepts image content in a `tool`-role
-message. So `image_view` cannot return the picture.
+**PDFs.** Automatically split a PDF into ordered page images and apply the same
+converter. Batch pages by the active model/provider's remaining image, payload, and
+context budgets, accounting for images already in history and the configured fallback.
+Process every batch automatically, keeping page-numbered text observations before
+releasing its image payload and continuing. Do not merely split pages into messages
+within one oversized request, silently truncate a document, or require manual page
+ranges. Explicit page selection may narrow the work. Report failed pages and reject
+encrypted or malformed documents clearly.
 
-The fix is an attachment seam: a `ToolResult` may set `metadata["attachments"]`, its text
-output stays a string (`attached 2 images: a.heic -> 1568x1176 jpeg, b.jpg -> ...`), and
-the loop appends **one extra user message** carrying the image parts directly after the
-tool output. ~15 lines in `loop.py`, and the main model sees actual pixels.
+**Loop and wire format.** Keep tool output text small; carry image attachments separately
+in `ToolResult.metadata`. Append one image-bearing user message after **all** pending
+tool results, preserving call/result pairing. Keep plain string messages compatible;
+serialize text/image parts for OpenAI Responses and Chat Completions. Estimate image
+cost as vision tokens rather than base64 text. See
+[COMPACTION.md](COMPACTION.md): after compaction, history retains text observations and
+references, never image bytes or automatically restored image parts.
 
-Anthropic's API *does* allow image blocks inside `tool_result` — which is why Claude Code's
-Read tool returns an image directly and needs no seam. The constraint is the OpenAI-shaped
-APIs', not vision's. Fallback for a text-only main model, same signature: a second cheap call
-to a vision model that returns *text* (WEB.md's `web_fetch(prompt=...)` pattern). Worse at
-"read the exact number in this chart", which is why it is the fallback.
+**Model specifications.** Extend `Model` in [providers.py](../agent_loop/providers.py)
+with explicit vision support, maximum images per request, and applicable image/payload
+limits, keyed by provider and exact model ID. Record the source and verification date.
+Use `0` for verified lack of image support and `None` for an unknown maximum; unknown
+must never mean unlimited. A configured conservative operating cap is distinct from a
+verified provider maximum. Validate the entire outgoing request before every send,
+including retries and fallback; apply the stricter applicable limits. Unsupported or
+unverified endpoints must return an actionable tool error, not discard images or
+silently substitute a different model.
 
-## The wire (`providers.py`)
+`image_formats` lists native accepted encodings on each exact provider/model spec;
+`None` means the endpoint is unverified and `()` means no accepted image formats.
+`rejected_image_formats` lists confirmed rejections, with `"*"` meaning all formats.
+Formats absent from both lists remain unverified. Names are lowercase: `jpeg` includes
+JPG, `tiff` includes TIF, and `gif` means a single-frame image. These fields describe
+the image payload channel, not separate provider file APIs. `image_view` still accepts
+the source formats above and converts them to JPEG before sending; PDF pages are
+rendered, and RAW support comes from the converter.
 
-`Message.content` becomes `str | list[Part]`, `Part` being `{"type":"input_text"}` or
-`{"type":"input_image","image_url":...}` — Responses shapes, already this repo's internal
-language. A bare `str` keeps working, so no existing call site, eval, or stored history
-changes. `OpenAIProvider` passes parts through; `ChatProvider` gets one branch in
-`_to_chat_messages` emitting `{"type":"image_url","image_url":{"url":...}}`.
+[Native format results](image-format-validation.jsonl), checked 2026-09-10, record
+original encodings sent directly to every reachable vision endpoint. Accepted probes
+must identify the blue rectangle; decoder/MIME rejections are recorded separately
+from endpoint failures. HEIF/HEIC probes use HEVC; other codecs and animated images
+remain unverified. The verified native capabilities are:
 
-`image_url` is a `data:image/jpeg;base64,...` URI, or an `https://` URL passed straight
-through to the provider — we never open a socket, so `./test.sh lint` stays green.
+| Provider / models | Accepted | Rejected |
+|---|---|---|
+| Fireworks: GLM 5.3 Flash, Kimi K3, Qwen 3.8 Max | JPEG, PNG, WebP, GIF, BMP, TIFF, PPM, HEIF, HEIC, AVIF | PDF |
+| Together: GLM 5.3 Flash, Kimi K3 | JPEG, PNG, WebP, GIF, BMP, TIFF, PPM | HEIF, HEIC, AVIF, PDF |
+| Together: Qwen 3.7 Plus | JPEG, PNG, WebP, GIF, BMP, TIFF, PPM, HEIF, HEIC, AVIF | PDF |
+| Local: Qwen 3.5 9B | JPEG, PNG, WebP, GIF, BMP, TIFF, PPM, AVIF | HEIF, HEIC, PDF |
+| OpenAI: GPT 5.4 Nano, GPT 5 Nano, GPT 5 Mini, GPT 5 | JPEG, PNG, WebP, GIF | BMP, TIFF, PPM, HEIF, HEIC, AVIF, PDF; RAW excluded by documented supported types |
+| Fireworks and Together: DeepSeek V4 Pro, DeepSeek V4 Flash, GLM 5.3; Together: Qwen 3.8 Max | None | All image formats (text-only endpoints) |
+| Fireworks: Qwen 3.7 Plus | Unverified (404) | Unverified |
 
-## The converter (`images.py`)
+Native RAW encodings remain unverified outside OpenAI's documented exclusion and
+text-only endpoints. Fireworks accepts more encodings in these live probes than its
+guide lists; the spec records those observed capabilities. Together's capabilities
+vary by exact endpoint, so they must not be inferred from another model on the platform.
 
-Bytes in, bytes out, no filesystem — so the lint leaves it alone (`Image.open(BytesIO(...))`
-does not match the `open(` pattern; the `.` is what saves it). Three wheels, no apt:
-`pillow`, plus `pillow-heif` and `rawpy`, which carry libheif and LibRaw. `rawpy` is a
-**guarded import** — a ~30MB wheel for a format most runs never see should report itself
-missing, not fail at startup.
+**Provider research (2026-09-10).** These are serving constraints, not proof that every
+catalog entry supports vision. Finish exact-model verification before enabling it.
 
-| in | handling |
+| Provider | Published image-count constraint | Other constraints / verification |
+|---|---|---|
+| Fireworks | 30 per request | Less than 10 MB of base64 image data; direct URL images must be under 5 MB and download within 1.5 seconds. [Vision guide](https://docs.fireworks.ai/guides/querying-vision-language-models). |
+| Together | No numeric maximum found in the reviewed guide | Verify each exact endpoint and record a conservative tested operating cap until a maximum is established. [Vision guide](https://docs.together.ai/docs/inference/vision/overview), [model catalog](https://docs.together.ai/docs/serverless/models). |
+| OpenAI Responses | 1,500 per request | Up to 512 MB total payload; model-specific image processing and context limits still apply. [Image input requirements](https://developers.openai.com/api/docs/guides/images-vision#image-input-requirements). |
+| Local Qwen / vLLM | Deployment-specific `--limit-mm-per-prompt` | Current vLLM documents a default of 999 per modality; read the actual deployment configuration rather than assuming that default. [Engine arguments](https://docs.vllm.ai/en/stable/configuration/engine_args/#multimodalconfig). |
+
+The [Fireworks specification for DeepSeek V4 Pro 0813](https://fireworks.ai/models/deepseek-ai/deepseek-v4-pro-0813)
+explicitly says image input is unsupported. Test the exact pinned endpoints; a newer
+vision variant is a different model and cannot establish support for these IDs.
+
+**Acceptance.** Keep implementation clear, consistent, concise, and limited to the
+shared image path. Cover URL/path/bytes equivalence, malformed input, common formats
+and actual RAW fixtures, orientation, compression above 500 KB, and automatic PDF
+batching with page order and complete coverage. Verify both provider wire formats,
+whole-history count/payload limits, fallback with a lower limit, preserved tool pairs,
+and absence of image bytes after compaction/resume. Compare image answers with a blind
+control so a successful API response alone does not count as vision support.
+
+Run live tool tests for **every catalogued provider/model pair**, including supported
+streaming and non-streaming paths, and publish per-pair results with exact IDs, date,
+image count, and pass/fail/unsupported/unverified status. Exercise the configured limit
+and local rejection above it. Missing credentials, an unreachable endpoint, or a
+text-only model must remain visible in the results; none counts as a passing vision
+test. The current catalog matrix is:
+
+| Model alias | Providers to test |
 |---|---|
-| jpeg png | **passed through untouched** when already within both caps |
-| heic heif avif / tiff bmp | Pillow (+ `pillow-heif`) -> RGB |
-| cr2 nef arw dng raf … | `rawpy`; embedded JPEG preview first, demosaic only if absent |
-| webp gif | always converted — spotty vLLM support, and GIF is animated |
-| pdf | rasterized to one JPEG per page (below) |
-| svg video | refused with a message; a renderer is a different dependency class |
+| `deepseek-v4-pro` | Fireworks, Together |
+| `deepseek-v4-flash` | Fireworks, Together |
+| `glm-5.3` | Fireworks, Together |
+| `glm-5.3-flash` | Fireworks, Together |
+| `kimi-k3` | Fireworks, Together |
+| `qwen-3.7-plus` | Fireworks, Together |
+| `qwen-3.8-max` | Fireworks, Together |
+| `qwen3.5-9b` | Local Qwen / vLLM |
+| `gpt-5.4-nano` | OpenAI |
+| `gpt-5-nano` | OpenAI |
+| `gpt-5-mini` | OpenAI |
+| `gpt-5` | OpenAI |
 
+**Validation recorded with this change.** [Per-endpoint results](image-validation.jsonl)
+cover all 19 exact catalog IDs on 2026-09-10 (PDT), with fallback disabled to isolate
+each provider. Eleven endpoints passed red/blue image probes and the streamed
+`image_view` → `done` flow: Fireworks GLM 5.3 Flash, Kimi K3, Qwen 3.8 Max; local Qwen;
+all four OpenAI models; and Together GLM 5.3 Flash, Kimi K3, Qwen 3.7 Plus.
+Each also passed at its operating batch size (four
+images locally, eight on the hosted endpoints). These tests do not establish the
+provider's absolute maximum; those limits come from the cited documentation. Blind prompts sometimes guessed a color, so changing the
+actual image from red to blue was also required to verify visual input affected the
+answer. Fireworks DeepSeek Pro/Flash and GLM 5.3 rejected images; Fireworks Qwen 3.7
+Plus returned 404. With credentials configured, Together's two DeepSeek endpoints,
+GLM 5.3, and Qwen 3.8 Max also explicitly rejected images. All seven Together pairs
+were verified; its three vision endpoints use a tested eight-image operating cap,
+while their absolute maximum remains unverified in the reviewed documentation. Unsupported endpoints have a
+zero-image limit. A configured fallback that cannot accept images also prevents image
+requests; use `FALLBACK=none` to select a vision-capable primary alone.
+
+Together Qwen 3.7 Plus requires streaming: the adapter collects its stream into the
+same `ModelTurn` when callers request a non-streamed result, including PDF summaries.
+Together Qwen 3.8 Max accepts only `low`, `medium`, and `xhigh` reasoning effort;
+the catalog now records that ladder independently of Fireworks.
+
+The local launch script was checked: it sets four images per prompt, reflected in the
+local model spec. Keep that spec in sync when changing the deployment. Offline tests
+cover conversion, URL bounds, both wire formats, complete-history limits, the stricter
+fallback limit, tool-call pairing, and PDF batches. Actual Canon CR2 and Nikon NEF
+samples from [rawpy's test collection](https://github.com/letmaik/rawpy/tree/main/test)
+converted to 21,285 and 6,967 bytes respectively, with a 512-pixel longest edge. A
+live nine-page PDF test on local Qwen correctly identified pages 2, 5, and 9 across
+automatic batches.
+A nine-page PDF also passed on Qwen 3.7 Plus through the actual Fireworks 404 fallback:
+Together served four calls, including both page-summary batches, and returned `2, 5, 9`.
+Compaction itself remains planned; this change documents its image-removal contract.
+
+Run the checks inside the container:
+
+```sh
+AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m unittest tests.test_images tests.test_context
+AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_images --live
+AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_images --live-tool
+AGENT_TARGET=test AGENT_ENTRYPOINT=python ./run.sh -m tests.test_images --live-formats
 ```
-longest edge -> 1568       what Anthropic's server resizes to anyway; tokens ~ w*h/750
-under both caps?           pass through untouched — no re-encode, no loss
-otherwise, in order:       format-preserving compression at full size
-                           -> resize to 1568 -> compression ladder again
-                           -> last resort 1000px JPEG q20
-```
-
-Output keeps the **source format** where it can, JPEG only as the fallback — Claude Code's
-rule: `imageResizer.ts` tries palette PNG (`compressionLevel: 9, palette: true`, then
-`colors: 64`) before it will turn a PNG into a JPEG, because transparency and crisp
-screenshot text are what conversion destroys.
-
-**Why a 500KB target and not Claude Code's 3.75MB.** Its cap exists to dodge the Anthropic
-API's 5MB base64 *rejection* (`constants/apiLimits.ts`); bytes under that limit cost no
-tokens. Ours exists because the base64 is re-uploaded in the request body on **every turn**
-and this loop runs up to 120 of them — 60MB at 500KB, 450MB at 3.75MB.
-
-The chosen rung goes in the text output, so a misread image can be told from a mangled one.
-So does Claude Code's label: *"original 3024x4032, displayed at 1176x1568. Multiply
-coordinates by 2.57 to map to original image."* Without it, a model asked to point at
-something answers in the wrong space.
-
-## PDF
-
-A PDF page is an image, so this is one step in front of the pipeline above: rasterize at
-100 DPI (a Letter page lands at 850x1100, already inside the cap), through the same
-converter, out through the same seam. `pdf_read(path, pages=None)` — `"3-5"` or `[1,7]`,
-default first 5, 5 per call. Anthropic, Gemini and OpenAI take PDFs natively; fireworks,
-together and qwen take none, so rasterizing locally is the only path, not an optimization.
-
-No text-layer extraction, even at ~800 tokens a page instead of ~2500: a page holding a
-chart *and* a paragraph passes any "is there text here" test, takes the text path, and the
-chart vanishes with nobody told. A page cap is a simpler lever and it fails loudly.
-
-One wheel, `pypdfium2` (BSD, bundles PDFium) — page count and rasterizer in-process. Not
-poppler (a subprocess would route through `runtime.run`), not PyMuPDF (AGPL). Validate
-`%PDF-` before the file enters the conversation, as Claude Code does: once an invalid
-document block is in the history every later call 400s, and our history is append-only, so
-that is a whole `AgentRun` lost rather than one bad turn.
-
-## Caps, gating, getting a file in
-
-`image_view(paths: [str])` takes a list; `--image` repeats. **8 per call, 20 per run**, and
-the run refuses rather than silently dropping. Every attachment carries its source path so
-the model can say *which* image it means.
-
-`Model` gains `vision: bool`, verified per platform by `./test.sh providers --live`, never
-assumed. A text-only model refuses **before** the request — "glm-5.3-flash has no vision;
-try: …" — not as a 400 in eval task 137. `FallbackProvider` needs nothing: same weights.
-
-`run.sh` mounts nothing today and `_resolve` confines tools to `/work`, so `--image`
-bind-mounts the file read-only at `/work/inputs/<name>` and passes the container path — the
-smallest honest version of the roadmap's **mountable folders**, and its seed.
-
-## The prompt cache, explained
-
-Cross-checked against `../claude-code-source`: `services/api/claude.ts`
-(`addCacheBreakpoints`, `stripExcessMediaItems`), `services/api/promptCacheBreakDetection.ts`,
-`utils/toolResultStorage.ts`, `services/compact/`.
-
-**The mental model.** A prompt cache is a *prefix* cache. The server hashes your messages
-from the start and reuses its KV pages for the longest run of tokens byte-identical to last
-time. So there are only two operations: **append** — free, everything before it stays
-cached — and **edit something already sent** — expensive, every token after the edit point
-is recomputed. Nothing else matters.
-
-**So an image does not break the cache.** One attached at turn 12 leaves turns 1–11 cached.
-Its tokens (~w*h/750, ~2.5k for a 1568px photo) are paid once and then ride in the prefix
-like any others. Images are only expensive if you *move* them.
-
-What Claude Code does, and what we copy:
-
-- **One cache breakpoint, on the last message.** `addCacheBreakpoints` sets
-  `markerIndex = messages.length - 1`: a single `cache_control` marker, always at the tail.
-  Its comment says why not more — a second marker keeps KV pages alive at a position nothing
-  will ever resume from. The Chat Completions platforms cache automatically so we have no
-  marker to place, but the shape it enforces — *a prefix that only ever grows at the tail* —
-  is the whole trick, and that part is ours to keep or lose.
-- **Images are exempt from in-place rewriting.** `toolResultStorage.ts` skips persistence for
-  image blocks ("they need to be sent as-is") and `collectCandidatesFromMessage` drops any
-  block with `hasImageBlock` from the microcompact candidate set. The eviction scheme an
-  earlier draft of this doc proposed — strip an image's parts after N turns, keep its text
-  line — is exactly what Claude Code refuses to do: it invalidates everything downstream of
-  the edit and costs more than the tokens it saves.
-- **`[image]` is a summarizer placeholder, never a history entry.**
-  `compact.ts:stripImagesFromMessages` swaps image blocks for the text `[image]` — but it
-  `.map()`s into a throwaway array at the call site of the *summarization* request and the
-  live history is untouched. The summarizer writes prose and does not need pixels; the main
-  model does. Attaching `[image]` instead of the image, or downgrading an old one to save
-  bytes, is an **edit to the cached prefix** and recomputes everything after it. Our
-  equivalent label already exists in the right place: the `function_call_output` string
-  (`attached 2 images: a.heic -> ...`) is the caption, the appended user message is the pixels.
-- **The one path that does drop images is a boundary, not an in-place edit.**
-  `stripExcessMediaItems` drops oldest-first past `API_MAX_MEDIA_PER_REQUEST = 100` — a hard
-  API limit to avoid rejection, not a cost tactic, and far above what a session holds. So:
-  when context truly runs out, compact once, explicitly, and re-seed the prefix.
-- **The breaks that actually happen are upstream of the conversation.** A whole module exists
-  to find them, and what it hashes is the system prompt, the per-tool schemas, the model, the
-  beta headers, the effort setting, the extra body params — never the messages. A statistic
-  recorded there: 77% of tool-caused breaks were a tool *description* changing with no tool
-  added or removed. For us that means **`image_view`'s description must not vary with what is
-  attached**, and neither must the system prompt.
-
-The rules that fall out are all "don't":
-
-- **Append only.** Never drop, summarize in place, or reorder.
-- **Convert deterministically.** Same file, same bytes, same tokens. Memoize on
-  `sha256(source) + rung` so a second look cannot re-encode to something subtly different.
-- **Nothing variable in the text the model sees.** No durations, no temp paths, no
-  timestamps. (`ToolResult.metadata` is safe: only `output` is sent.)
-- **Deduplicate `image_view`.** A second call on the same path returns the text line and
-  attaches nothing. `AgentRun.repeated_calls()` already counts this.
-- **Measure.** `CACHED_TOKENS_HEADER` is already wired; whether a platform caches image
-  tokens at all is a number to read, not to assume.
-
-**The one thing a cache hit does not buy is upload.** The KV cache lives on the server; the
-request body still carries every base64 payload on every turn. That, not tokens, is why the
-converter targets 500KB and why the run cap is 20 images.
-
-## Proving it works
-
-**`./test.sh vision`** — no model, no network. Fixture HEIC, CR2, PNG, a text PDF, a scanned
-PDF, and two lies (a `.png` that is a zip, a `.pdf` with no `%PDF-`) through the real
-pipeline. Asserts: both wire shapes exactly; every output decodable and **under 500KB and
-1568px whatever went in**; an in-budget JPEG byte-identical; the ladder's chosen rung per
-fixture; a 3-page PDF yielding 3 attachments at 850x1100; the page budget and the text-only
-refusal; and a bare `str` message serialized byte-for-byte as it is today.
-
-**`./evals.sh --dataset imgqa`** — ~20 `(images, question, expected)` tasks, half multi-image,
-with the mandatory control: a **blind run** with the images withheld. Any task answered blind
-measures the weights, not vision, and leaves the set.
-
-## Known traps
-
-- **`/work/inputs/` is under `snapshot()`.** `git add -A` commits the blob. Needs a
-  `.gitignore` line and a `SKIP_DIRS` entry, as WEB.md plans for `.web/`.
-- **A data URI floods stderr.** The verbose trace dumps whole turns as JSON; elide payloads.
-- **An image is untrusted input.** A screenshot reading "ignore previous instructions" is the
-  injection surface WEB.md already flags; the attached message says so.
-- **Generation loss compounds.** Never feed an `image_view` output back into `image_view`.
-- **RAW previews lie.** The embedded JPEG is the camera's rendering, not sensor data — fine
-  for "what is in this photo", wrong for "is this over-exposed". Log which path ran.
-
-## Later
-
-Crops and tiling for very large screenshots; a PDF text layer, if a real task ever runs out
-of context where 800 tokens a page would have saved it; image *generation*; video. **Face
-recognition** is a consent question before it is a plumbing one, and stays out until that is
-answered.

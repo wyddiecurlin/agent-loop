@@ -131,6 +131,12 @@ class Model:
 	reasoning: tuple[str, ...] = ("none",)  # accepted reasoning_effort, cheapest first
 	context: int = 128_000
 	max_output: int = DEFAULT_MAX_OUTPUT_TOKENS
+	max_images: int | None = None  # 0: unsupported; None: maximum not published/verified
+	vision: bool = False
+	image_batch: int = 1  # conservative operating cap, distinct from the provider maximum
+	streaming_only: bool = False
+	image_formats: tuple[str, ...] | None = None  # native accepted formats; None: unverified
+	rejected_image_formats: tuple[str, ...] = ()  # '*': all; unlisted formats are unverified
 
 
 # Effort ladders, named once so the tables below stay readable.
@@ -138,39 +144,67 @@ _TOGGLEABLE = ("none", "low", "medium", "high", "max")  # reasoning can be turne
 _ALWAYS_ON = ("low", "high", "max")  # it cannot; "max" is the model's own default
 _M = 1_048_576
 
+# Native encodings, before image_view conversion; GIF means a single frame.
+# Shared tuples keep identical verified capabilities consistent across exact endpoints.
+_WEB_IMAGES = ("jpeg", "png", "webp", "gif")
+_RASTER_IMAGES = _WEB_IMAGES + ("bmp", "tiff", "ppm")
+_EXTENDED_IMAGES = _RASTER_IMAGES + ("heif", "heic", "avif")
+_RAW_IMAGES = ("dng", "cr2", "cr3", "nef", "arw", "raf")
+
+# Image limits/formats checked 2026-09-10; sources and unknowns are in docs/IMAGE.md.
+# Local Qwen's launch script explicitly sets --limit-mm-per-prompt image=4.
 CATALOG: dict[str, dict[str, Model]] = {
 	"fireworks": {
 		# Both platforms are pinned to a dated build. `deepseek-v4-pro` also resolves on
 		# Fireworks and floats to whatever is current, which would silently change what a
 		# stored eval number means.
-		"deepseek-v4-pro":  Model("accounts/fireworks/models/deepseek-v4-pro-0813",   1.32, 0.044, 3.96, _TOGGLEABLE, _M),
-		"deepseek-v4-flash": Model("accounts/fireworks/models/deepseek-v4-flash-0731", 0.22, 0.007, 0.66, _TOGGLEABLE, _M),
-		"glm-5.3":          Model("accounts/fireworks/models/glm-5p3",          1.40, 0.26,  4.40, _ALWAYS_ON,  _M, 32_768),
-		"glm-5.3-flash":    Model("accounts/fireworks/models/glm-5p3-flash",    0.15, 0.03,  0.50, _ALWAYS_ON,  _M, 32_768),
-		"kimi-k3":          Model("accounts/fireworks/models/kimi-k3",          3.00, 0.30, 15.00, _ALWAYS_ON,  _M, 32_768),
-		"qwen-3.7-plus":    Model("accounts/fireworks/models/qwen3p7-plus",     0.40, 0.08,  1.60, _TOGGLEABLE, 262_144),
-		"qwen-3.8-max":     Model("accounts/fireworks/models/qwen3p8-max",      2.00, 0.25,  6.00, _TOGGLEABLE, _M),
+		"deepseek-v4-pro":  Model("accounts/fireworks/models/deepseek-v4-pro-0813",   1.32, 0.044, 3.96, _TOGGLEABLE, _M, max_images=0,
+		                         image_formats=(), rejected_image_formats=("*",)),
+		"deepseek-v4-flash": Model("accounts/fireworks/models/deepseek-v4-flash-0731", 0.22, 0.007, 0.66, _TOGGLEABLE, _M, max_images=0,
+		                         image_formats=(), rejected_image_formats=("*",)),
+		"glm-5.3":          Model("accounts/fireworks/models/glm-5p3",          1.40, 0.26,  4.40, _ALWAYS_ON,  _M, 32_768, max_images=0,
+		                         image_formats=(), rejected_image_formats=("*",)),
+		"glm-5.3-flash":    Model("accounts/fireworks/models/glm-5p3-flash",    0.15, 0.03,  0.50, _ALWAYS_ON,  _M, 32_768, max_images=30, vision=True, image_batch=8,
+		                         image_formats=_EXTENDED_IMAGES, rejected_image_formats=("pdf",)),
+		"kimi-k3":          Model("accounts/fireworks/models/kimi-k3",          3.00, 0.30, 15.00, _ALWAYS_ON,  _M, 32_768, max_images=30, vision=True, image_batch=8,
+		                         image_formats=_EXTENDED_IMAGES, rejected_image_formats=("pdf",)),
+		"qwen-3.7-plus":    Model("accounts/fireworks/models/qwen3p7-plus",     0.40, 0.08,  1.60, _TOGGLEABLE, 262_144, max_images=30, vision=True, image_batch=8,
+		                         image_formats=None),
+		"qwen-3.8-max":     Model("accounts/fireworks/models/qwen3p8-max",      2.00, 0.25,  6.00, _TOGGLEABLE, _M, max_images=30, vision=True, image_batch=8,
+		                         image_formats=_EXTENDED_IMAGES, rejected_image_formats=("pdf",)),
 	},
 	"together": {
-		"deepseek-v4-pro":  Model("deepseek-ai/DeepSeek-V4-Pro-0813",   1.32, 0.13, 3.96, _TOGGLEABLE, _M),
-		"deepseek-v4-flash": Model("deepseek-ai/DeepSeek-V4-Flash-0731", 0.14, 0.03, 0.28, _TOGGLEABLE, _M),
-		"glm-5.3":          Model("zai-org/GLM-5.3",                    1.40, 0.26, 4.40, _ALWAYS_ON,  _M, 32_768),
-		"glm-5.3-flash":    Model("zai-org/GLM-5.3-Flash",              0.15, 0.03, 0.50, _ALWAYS_ON,  _M, 32_768),
-		"kimi-k3":          Model("moonshotai/Kimi-K3",                 3.00, 0.30, 15.00, _ALWAYS_ON, _M, 32_768),
+		"deepseek-v4-pro":  Model("deepseek-ai/DeepSeek-V4-Pro-0813",   1.32, 0.13, 3.96, _TOGGLEABLE, _M, max_images=0,
+		                         image_formats=(), rejected_image_formats=("*",)),
+		"deepseek-v4-flash": Model("deepseek-ai/DeepSeek-V4-Flash-0731", 0.14, 0.03, 0.28, _TOGGLEABLE, _M, max_images=0,
+		                         image_formats=(), rejected_image_formats=("*",)),
+		"glm-5.3":          Model("zai-org/GLM-5.3",                    1.40, 0.26, 4.40, _ALWAYS_ON,  _M, 32_768, max_images=0,
+		                         image_formats=(), rejected_image_formats=("*",)),
+		"glm-5.3-flash":    Model("zai-org/GLM-5.3-Flash",              0.15, 0.03, 0.50, _ALWAYS_ON,  _M, 32_768, vision=True, image_batch=8,
+		                         image_formats=_RASTER_IMAGES, rejected_image_formats=("heif", "heic", "avif", "pdf")),
+		"kimi-k3":          Model("moonshotai/Kimi-K3",                 3.00, 0.30, 15.00, _ALWAYS_ON, _M, 32_768, vision=True, image_batch=8,
+		                         image_formats=_RASTER_IMAGES, rejected_image_formats=("heif", "heic", "avif", "pdf")),
 		# No cached-input rate is published for either Qwen; billed here at the full input
 		# rate, which over-states the cost rather than under-stating it.
-		"qwen-3.7-plus":    Model("Qwen/Qwen3.7-Plus",                  0.32, 0.32, 1.28, _TOGGLEABLE, 1_000_000),
-		"qwen-3.8-max":     Model("Qwen/Qwen3.8-2.4T-A95B",             2.00, 0.25, 6.00, _TOGGLEABLE, _M),
+		"qwen-3.7-plus":    Model("Qwen/Qwen3.7-Plus",                  0.32, 0.32, 1.28, _TOGGLEABLE, 1_000_000, vision=True, image_batch=8, streaming_only=True,
+		                         image_formats=_EXTENDED_IMAGES, rejected_image_formats=("pdf",)),
+		"qwen-3.8-max":     Model("Qwen/Qwen3.8-2.4T-A95B",             2.00, 0.25, 6.00, ("low", "medium", "xhigh"), _M, max_images=0,
+		                         image_formats=(), rejected_image_formats=("*",)),
 	},
 	# Self-hosted vLLM on the local box: the GPU is already paid for, so per-token is 0.
 	"qwen": {
-		"qwen3.5-9b": Model(QWEN_MODEL, 0.0, 0.0, 0.0, _TOGGLEABLE, 32_768),
+		"qwen3.5-9b": Model(QWEN_MODEL, 0.0, 0.0, 0.0, _TOGGLEABLE, 32_768, max_images=4, vision=True, image_batch=4,
+		                         image_formats=_RASTER_IMAGES + ("avif",), rejected_image_formats=("heif", "heic", "pdf")),
 	},
 	"openai": {
-		"gpt-5.4-nano": Model("gpt-5.4-nano", 0.20, 0.02, 1.25, _TOGGLEABLE, 400_000),
-		"gpt-5-nano":   Model("gpt-5-nano",   0.05, 0.005, 0.40, _TOGGLEABLE, 400_000),
-		"gpt-5-mini":   Model("gpt-5-mini",   0.25, 0.025, 2.00, _TOGGLEABLE, 400_000),
-		"gpt-5":        Model("gpt-5",        1.25, 0.125, 10.00, _TOGGLEABLE, 400_000),
+		"gpt-5.4-nano": Model("gpt-5.4-nano", 0.20, 0.02, 1.25, _TOGGLEABLE, 400_000, max_images=1500, vision=True, image_batch=8,
+		                         image_formats=_WEB_IMAGES, rejected_image_formats=("bmp", "tiff", "ppm", "heif", "heic", "avif", "pdf") + _RAW_IMAGES),
+		"gpt-5-nano":   Model("gpt-5-nano",   0.05, 0.005, 0.40, _TOGGLEABLE, 400_000, max_images=1500, vision=True, image_batch=8,
+		                         image_formats=_WEB_IMAGES, rejected_image_formats=("bmp", "tiff", "ppm", "heif", "heic", "avif", "pdf") + _RAW_IMAGES),
+		"gpt-5-mini":   Model("gpt-5-mini",   0.25, 0.025, 2.00, _TOGGLEABLE, 400_000, max_images=1500, vision=True, image_batch=8,
+		                         image_formats=_WEB_IMAGES, rejected_image_formats=("bmp", "tiff", "ppm", "heif", "heic", "avif", "pdf") + _RAW_IMAGES),
+		"gpt-5":        Model("gpt-5",        1.25, 0.125, 10.00, _TOGGLEABLE, 400_000, max_images=1500, vision=True, image_batch=8,
+		                         image_formats=_WEB_IMAGES, rejected_image_formats=("bmp", "tiff", "ppm", "heif", "heic", "avif", "pdf") + _RAW_IMAGES),
 	},
 }
 
@@ -207,6 +241,34 @@ def model_spec(model_id: str, provider: str) -> Model | None:
 		if entry.id == model_id:
 			return entry
 	return None
+
+
+def image_parts(messages) -> list[dict]:
+	if isinstance(messages, str):
+		return []
+	return [part for item in messages for part in
+	        (item.get("content") if isinstance(item.get("content"), list) else [])
+	        if part.get("type") == "input_image"]
+
+
+def image_limit(model: str, provider: str) -> int:
+	spec = model_spec(model, provider)
+	if spec is None or not spec.vision:
+		raise ValueError(f"image input is unsupported or unverified for {provider}/{model}")
+	return spec.max_images if spec.max_images is not None else spec.image_batch
+
+
+def validate_images(messages, model: str, provider: str) -> None:
+	parts = image_parts(messages)
+	if not parts:
+		return
+	limit = image_limit(model, provider)
+	if len(parts) > limit:
+		raise ValueError(f"{provider}/{model} accepts at most {limit} images per request; got {len(parts)}")
+	if provider == "fireworks" and sum(len(part.get("image_url", "")) for part in parts) >= 10_000_000:
+		raise ValueError("Fireworks image payload must be below 10 MB")
+	if provider == "openai" and len(json.dumps(messages).encode()) > 512_000_000:
+		raise ValueError("OpenAI request payload exceeds 512 MB")
 
 
 def alias_for(model_id: str, provider: str) -> str | None:
@@ -308,7 +370,7 @@ TRACKER = CostTracker()
 class Message(TypedDict):
 	"""A chat turn from the user, system, or assistant."""
 	role: Literal["user", "assistant", "system", "developer"]
-	content: str
+	content: str | list[dict]
 
 
 class FunctionCallItem(TypedDict):
@@ -409,6 +471,7 @@ class OpenAIProvider:
 		max_output_tokens: int | None = None,
 		thinking: bool | None = None,
 	) -> ModelTurn:
+		validate_images(messages, model, "openai")
 		kwargs: dict = {
 			"model": model,
 			"input": resendable(messages),
@@ -614,7 +677,14 @@ class ChatProvider:
 				out.append({"role": "tool", "tool_call_id": item["call_id"], "content": item["output"]})
 			else:
 				role = "system" if item["role"] == "developer" else item["role"]
-				out.append({"role": role, "content": item["content"]})
+				content = item["content"]
+				if isinstance(content, list):
+					content = [
+						{"type": "text", "text": part["text"]} if part["type"] == "input_text" else
+						{"type": "image_url", "image_url": {"url": part["image_url"], "detail": part.get("detail", "low")}}
+						for part in content
+					]
+				out.append({"role": role, "content": content})
 		return out
 
 	@staticmethod
@@ -665,7 +735,11 @@ class ChatProvider:
 	) -> ModelTurn:
 		if max_output_tokens is not None:
 			validate_output_tokens(max_output_tokens)
+		validate_images(messages, model, self.backend.name)
 		spec = model_spec(model, self.backend.name)
+		if spec and spec.streaming_only and not stream:
+			stream = True
+			on_text = on_tool_call = None  # Collect internally for non-streaming callers.
 		extra_body: dict = {}
 		kwargs: dict = {
 			"model": model,
@@ -830,6 +904,9 @@ class FallbackProvider:
 		return entry.id if entry else None
 
 	def generate(self, messages: Messages, model: str, tools: list[dict] | None, **kw) -> ModelTurn:
+		if image_parts(messages):
+			twin = self._twin(model)
+			validate_images(messages, twin, self.secondary.backend.name)
 		try:
 			return self.primary.generate(messages, model, tools, **kw)
 		except Exception as exc:
