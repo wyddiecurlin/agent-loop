@@ -347,12 +347,18 @@ neither retain their original behavior.
 ```
 
 The cap applies to each main-agent generation, including fallback, rather than the
-sum across tool steps. Capped voice requests use the model's lowest supported
-reasoning setting. Voice instructions and the `done` tool ask for a few concise
+sum across tool steps. Main-agent voice requests inherit the provider's thinking
+setting, which defaults to on. Voice instructions and the `done` tool ask for a few concise
 sentences as a soft limit; the larger generation budget leaves room for tool arguments.
-This keeps local Qwen's optional thinking from consuming its mobile output budget. Always-on
-reasoning models may still require a larger budget. Tool arguments count toward
-the same cap; it is not a guarantee of a valid final answer or of speech duration.
+Thinking and tool arguments share that generation budget; reasoning models may
+require a larger budget. The cap does not guarantee a valid final answer or speech duration.
+
+After three consecutive turns that only repeat earlier tool calls with identical
+results, the loop restricts tools to `done` and asks for an answer from the existing
+evidence. Recovery gets at most two model turns, then stops with `stalled` if no valid
+answer is submitted. Changed results reset the repetition counter, so polling that
+makes progress can continue. Preamble, emotion, and page-extraction side calls keep
+their explicit thinking-off settings.
 
 `agent_loop/context.py` uses `CATALOG[provider][alias].context` as the model map,
 with the smaller serving window when a fallback provider is configured. Custom

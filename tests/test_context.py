@@ -19,6 +19,32 @@ loop = importlib.import_module('agent_loop.loop')
 
 
 class ResponseBudgetTests(unittest.TestCase):
+    def test_thinking_defaults_on_and_explicit_off_is_respected(self):
+        with patch.dict(os.environ, {}, clear=True):
+            for backend, model in [('qwen', 'qwen3.5-9b'), ('fireworks', 'deepseek-v4-pro')]:
+                client = FakeClient()
+                provider = ChatProvider(backend, client=client)
+                provider.generate([], model, None, max_output_tokens=8192)
+                if backend == 'qwen':
+                    self.assertTrue(client.seen['extra_body']['chat_template_kwargs']['enable_thinking'])
+                else:
+                    self.assertNotEqual(client.seen['reasoning_effort'], 'none')
+                provider.generate([], model, None, thinking=False)
+                if backend == 'qwen':
+                    self.assertFalse(client.seen['extra_body']['chat_template_kwargs']['enable_thinking'])
+                else:
+                    self.assertEqual(client.seen['reasoning_effort'], 'none')
+            client = Mock()
+            provider = OpenAIProvider(client=client)
+            with patch.object(provider, '_to_turn', return_value=None):
+                provider.generate([], 'gpt-5.4-nano', None)
+                self.assertEqual(client.responses.create.call_args.kwargs['reasoning'], {'effort': 'high'})
+                provider.generate([], 'gpt-5.4-nano', None, thinking=False)
+                self.assertEqual(client.responses.create.call_args.kwargs['reasoning'], {'effort': 'none'})
+        with patch.dict(os.environ, {'QWEN_THINKING': '0'}, clear=True):
+            self.assertFalse(ChatProvider('qwen', client=FakeClient()).thinking)
+            self.assertTrue(ChatProvider('fireworks', client=FakeClient()).thinking)
+
     def test_chat_override_is_per_call_and_survives_fallback(self):
         client = FakeClient()
         provider = ChatProvider('qwen', client=client, max_output_tokens=8192, thinking=True)
@@ -141,6 +167,7 @@ class ResponseBudgetTests(unittest.TestCase):
              patch.object(bridge, 'emit') as emit:
             bridge.serve(io.StringIO('\n'.join(map(json.dumps, events))), None)
         self.assertEqual([kw['max_output_tokens'] for _, kw in calls], [128, 256, 128])
+        self.assertTrue(all(kw.get('thinking') is None for _, kw in calls))
         self.assertIsNone(calls[1][1]['history'])
         self.assertIn('heard fragment', calls[1][0])
         self.assertIn('second', calls[1][0])

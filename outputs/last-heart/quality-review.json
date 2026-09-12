@@ -1,0 +1,28 @@
+{
+  "storyboards_reviewed": 13,
+  "character_references_reviewed": 2,
+  "storyboard_repairs": {
+    "2": "robot identity and dying bird pose",
+    "3": "bird anatomy and powerless state",
+    "4": "bird must be powerless",
+    "5": "bird identity and powerless state",
+    "6": "clear pre-transfer pose",
+    "8": "robot identity",
+    "9": "eyes remain unlit before revival",
+    "10": "remove erroneous back core; roof cutaway",
+    "11": "restore intact head"
+  },
+  "video_repairs": {
+    "1": "remove unintended stomp and jump",
+    "9": "keep robot powered off"
+  },
+  "status": "Complete",
+  "validation": {
+    "video_duration": 60,
+    "audio_duration": 60,
+    "width": 1080,
+    "height": 1920,
+    "fps": 24,
+    "full_decode": "passed"
+  }
+}

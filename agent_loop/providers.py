@@ -41,8 +41,8 @@ from .tools import ToolCall
 # Defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL = "gpt-5.4-nano"  # the openai backend's pick: fastest TTFT (~0.67s), reasoning off
-DEFAULT_REASONING_EFFORT = "none"  # no reasoning tokens before the first output token
+DEFAULT_MODEL = "gpt-5.4-nano"
+DEFAULT_REASONING_EFFORT = "high"
 QWEN_ENGLISH_ONLY = (
 	"OUTPUT LANGUAGE: ENGLISH ONLY. Always write your responses in English, including reasoning, preambles, summaries, "
 	"and user-facing text in tool arguments such as done(answer). "
@@ -554,9 +554,9 @@ class ChatProvider:
 	translates both directions and returns the same ModelTurn as OpenAIProvider.
 
 	Env, per backend: <NAME>_BASE_URL, <NAME>_API_KEY. Shared knobs:
-	  REASONING_EFFORT   override the catalog's floor ("low"/"high"/"max"/an int budget)
+	  REASONING_EFFORT   override the default thinking effort ("low"/"high"/"max"/an int budget)
 	  MAX_OUTPUT_TOKENS  override the catalog's per-model cap
-	  QWEN_THINKING=1    the vLLM backend only, where effort is a boolean and not a dial
+	  QWEN_THINKING=0    disable thinking on vLLM (enabled by default)
 	"""
 
 	def __init__(
@@ -583,12 +583,10 @@ class ChatProvider:
 			timeout=timeout,
 			max_retries=0,
 		)
-		# QWEN_THINKING is the vLLM box's own switch and is read only there. On a hosted
-		# platform the knob is REASONING_EFFORT, which says how much rather than whether -
-		# and leaving this env-driven let a stale QWEN_THINKING=1 in .env quietly buy
-		# max-effort reasoning on every Fireworks call. ./test.sh providers caught it.
+		# Thinking defaults on. QWEN_THINKING only controls vLLM; hosted platforms
+		# retain their independent REASONING_EFFORT override.
 		self.thinking = thinking if thinking is not None else (
-			b.reasoning_style == "chat_template" and os.getenv("QWEN_THINKING", "0") == "1")
+			os.getenv("QWEN_THINKING", "1") == "1" if b.reasoning_style == "chat_template" else True)
 		self.reasoning_effort = reasoning_effort or os.getenv("REASONING_EFFORT") or None
 		self.temperature = temperature if temperature is not None else float(
 			os.getenv("QWEN_TEMPERATURE", DEFAULT_TEMPERATURE))

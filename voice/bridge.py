@@ -370,8 +370,7 @@ def serve(stdin, runtime: DockerRuntime, preamble: Callable[[list | None, str], 
 			with observe_stream(emotions):
 				run = agent_loop(prompt, runtime, history=history,
 				                 system_prompt=system_prompt, verbose=False,
-				                 max_output_tokens=options.get("max_output_tokens"), context_budget=budget,
-				                 thinking=False if options.get("max_output_tokens") is not None else None)
+				                 max_output_tokens=options.get("max_output_tokens"), context_budget=budget)
 		except Exception as exc:  # noqa: BLE001 - a crash is still an answer to speak
 			error = f"{type(exc).__name__}: {exc}"
 			gate.finish()

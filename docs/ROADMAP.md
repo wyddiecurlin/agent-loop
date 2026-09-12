@@ -6,6 +6,31 @@ first two. Three tracks, in dependency order — core, then eval, then learning.
 
 Status: `[x]` done, `[ ]` not started.
 
+## Next-step plans
+
+These are proposed changes, grounded in the current implementation. Each plan starts
+with a few action bullets and covers CLI, Mimo, and a standalone browser voice client.
+
+| Area | Plan |
+|---|---|
+| Evaluate Parallel.ai against existing Brave search | [WEB](WEB.md) |
+| Gmail, Calendar, and other work tools | [WORK_TOOLS](WORK_TOOLS_D.md) |
+| Image understanding and enrolled face recognition | [IMAGE](IMAGE.md) |
+| Folder mounts, session restore, rewind, and duplication | [SESSIONS](SESSIONS.md) |
+| Per-user settings, OAuth, and API credentials | [USER_ENV](USER_ENV.md) |
+| Conversation compaction using the pinned Codex prompts | [COMPACTION](COMPACTION.md) |
+| RGBA media tooling | [RGBA](RGBA.md) |
+| User context and persistent memory | [MEMORY](MEMORY.md) |
+| Schedules, inbox, monitoring, agent collaboration, and 24-hour jobs | [JOBS](JOBS.md) |
+
+Start with user/session ownership and durable restore. Compaction and the Parallel
+evaluation can proceed independently. Build work tools, images, memory, and RGBA on
+those shared foundations, including operation receipts before external writes; add durable
+jobs before unattended operation. Keep one container agent loop, one launcher-side
+lifecycle owner, and one trusted host SQLite metadata store; credentials stay separately
+protected. Mimo and browser voice are clients.
+Browser voice UI is new work; Mimo already shares the existing voice harness.
+
 ## Core (500 LOC budget)
 
 The whole core stays small enough to read in one sitting. Everything the agent can reach
@@ -17,8 +42,8 @@ rather than a convention (`./test.sh lint`).
 - [x] **tools** — the prebaked registry, reaching the world only via Runtime.
 - [x] **sandbox** — one container topology; conformance and escape both tested.
 - [x] **log and tracing** — stdout is result JSON, stderr is the trace.
-- [ ] **web browsing** — a native way for the agent to fetch and read the web
-      (plan: `docs/WEB.md`).
+- [x] **web search/fetch** — Brave search and bounded page fetch/extraction are implemented;
+      Parallel evaluation is next ([WEB](WEB.md)). Interactive browsing remains future work.
 - [ ] **image understanding** — vision in the loop, including face recognition.
 - [ ] **mountable folders** — attach arbitrary host directories when starting a session.
 - [ ] **resume from container state** — a session that survives the container it began in.

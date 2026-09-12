@@ -281,10 +281,11 @@ def main(argv: list[str]) -> int:
 			results.append(check(f"{backend}/{alias} is never sent effort=none",
 			                     floor_ok and sent != "none", f"sent {sent!r}"))
 
-	# 6. ...and the ones that can are, by default, because reasoning tokens are output
-	#    tokens and this loop pays for them on every one of up to 60 steps.
+	# 6. Thinking defaults on; explicit off still selects the supported floor.
 	sent = request_for("fireworks", "deepseek-v4-pro").get("reasoning_effort")
-	results.append(check("a toggleable model defaults to effort=none", sent == "none", f"sent {sent!r}"))
+	results.append(check("a toggleable model defaults to thinking on", sent == "max", f"sent {sent!r}"))
+	sent = request_for("fireworks", "deepseek-v4-pro", thinking=False).get("reasoning_effort")
+	results.append(check("explicit thinking=0 selects effort=none", sent == "none", f"sent {sent!r}"))
 	sent = request_for("fireworks", "deepseek-v4-pro", thinking=True).get("reasoning_effort")
 	results.append(check("thinking=1 asks for the top of the ladder", sent == "max", f"sent {sent!r}"))
 	sent = request_for("fireworks", "kimi-k3", reasoning_effort="high").get("reasoning_effort")

@@ -57,7 +57,7 @@ not the base.
 | piece | where | notes |
 |---|---|---|
 | this repo | `~/Documents/agent-loop`, branch `main` | `run.sh` rebuilds the image per session; warm rebuild 0.5 s |
-| `.env` | same dir, mode 600 | `PROVIDER=qwen`, `QWEN_BASE_URL=http://172.17.0.1:9000/v1`, `QWEN_THINKING=0`; Fireworks/Together keys kept for fallback |
+| `.env` | same dir, mode 600 | `PROVIDER=qwen`, `QWEN_BASE_URL=http://172.17.0.1:9000/v1`, `QWEN_THINKING=1`; Fireworks/Together keys kept for fallback |
 | gateway | `~/Documents/pet-moment/mobile-app/gateway`, Python 3.12 venv via `uv` | `~/Documents/pet-moment` is a clone of `LemonTree-Media-LLC/pet-moment` on `main`; the `.venv` inside `gateway/` is untracked, keep it |
 | voice logs | `~/Documents/agent-loop/logs/voice/<timestamp>/`, `latest` symlink | every app session's `session.log`, `events.jsonl`, `turns/`; `MIMO_VOICE_LOG=0` off, `MIMO_VOICE_LOG_AUDIO=1` keeps WAVs. Reading them: `.claude/skills/debug-voice` |
 | gateway unit | `~/.config/systemd/user/mimo-gateway.service` | `127.0.0.1:8787`; token and `VOICE_API` in `~/.config/mimo/gateway.env` |

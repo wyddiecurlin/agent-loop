@@ -124,6 +124,14 @@ class AgentRun:
 
 
 MAX_STALLED_TURNS = 2
+MAX_REPEATED_TURNS = 3
+MAX_RECOVERY_TURNS = 2
+REPETITION_NUDGE = (
+	"Your recent tool calls repeated earlier calls with identical results and made no "
+	"progress. Stop searching or retrying. Only `done` is available now. Use the evidence "
+	"already collected to answer the user; if it is insufficient, explain what you found "
+	"and what remains unresolved."
+)
 STALL_NUDGE = (
 	"Your last response contained no tool call. Every turn must call exactly one tool. "
 	"Do not explain your reasoning first - call the tool now, and if the task is already "
@@ -225,16 +233,27 @@ def agent_loop(
 
 
 	stalled = 0
+	seen_results = set()
+	repeated = 0
+	recovery = False
+	recovery_turns = 0
 	for step in range(1, max_steps + 1):
+		if recovery:
+			if recovery_turns >= MAX_RECOVERY_TURNS:
+				return finish_run("stalled", step - 1, "Repeated tool calls; failed to finish during recovery")
+			recovery_turns += 1
+		schema = registry.schema()
+		if recovery:
+			schema = [tool for tool in schema if tool["name"] == DONE_TOOL]
 		trace(f"[LOG] step {step}/{max_steps} ({len(messages)} items in context)")
 		try:
 			if context_budget is not None:
-				if context_budget.prepare(messages, registry.schema(), current_start, max_output_tokens):
+				if context_budget.prepare(messages, schema, current_start, max_output_tokens):
 					current_start = 1
 					history_cleared = True
 			turn = generate(
 				messages=messages,
-				tools=registry.schema(),
+				tools=schema,
 				tool_choice="required",
 				stream=True,
 				on_text=stream,
@@ -243,7 +262,7 @@ def agent_loop(
 				**({"thinking": thinking} if thinking is not None else {}),
 			)
 			if context_budget is not None:
-				context_budget.observe(messages, registry.schema(), turn.usage)
+				context_budget.observe(messages, schema, turn.usage)
 		except Exception as exc:  # noqa: BLE001
 			log(f"[ERROR] generate failed at step {step}: {type(exc).__name__}: {exc}")
 			return finish_run("error", step - 1, f"{type(exc).__name__}: {exc}")
@@ -272,8 +291,20 @@ def agent_loop(
 			))
 
 		answer = None
+		new_result = False
 		for call in turn.tool_calls or []:
-			result: ToolResult = registry.execute(call)
+			if recovery and call.name != DONE_TOOL:
+				result = ToolResult(ok=False, output="Call blocked: only `done` is available during repetition recovery.")
+			else:
+				result = registry.execute(call)
+			# Ignore call IDs and JSON formatting, but preserve differences in results.
+			try:
+				arguments = json.dumps(json.loads(call.arguments), sort_keys=True)
+			except (ValueError, TypeError):
+				arguments = call.arguments
+			fingerprint = (call.name, arguments, result.ok, result.output)
+			new_result |= fingerprint not in seen_results
+			seen_results.add(fingerprint)
 			trace(f"[LOG] {result.output[:300]}")
 			messages.append(FunctionCallOutputItem(
 				type='function_call_output',
@@ -288,6 +319,12 @@ def agent_loop(
 		if answer is not None:
 			messages.append(Message(role='assistant', content=answer))
 			return finish_run("done", step)
+		if not recovery and turn.tool_calls:
+			repeated = 0 if new_result else repeated + 1
+			if repeated >= MAX_REPEATED_TURNS:
+				log(f"[LOG] repeated tool results for {repeated} turns; restricting recovery to done")
+				messages.append(Message(role='user', content=REPETITION_NUDGE))
+				recovery = True
 		if turn.stop_reason == "incomplete":
 			# The output limit cut the model off mid-call. The registry has refused the
 			# half-written arguments; left there, the model writes the same thing again
@@ -296,6 +333,8 @@ def agent_loop(
 			log(f"[LOG] output cut off at {limit}")
 			messages.append(Message(role='user', content=TRUNCATION_NUDGE.format(limit=limit)))
 
+	if recovery_turns >= MAX_RECOVERY_TURNS:
+		return finish_run("stalled", max_steps, "Repeated tool calls; failed to finish during recovery")
 	log(f"[LOG] hit max_steps {max_steps}")
 	return finish_run("max_steps", max_steps)
 

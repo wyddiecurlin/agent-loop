@@ -1,0 +1,1066 @@
+{
+  "title": "LAST HEART",
+  "video_url": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+  "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+  "duration_seconds": 60,
+  "aspect_ratio": "9:16",
+  "video_model": "cinematic_studio_3_0",
+  "video_model_params": {
+    "resolution": "1080p",
+    "genre": "drama",
+    "generate_audio": true
+  },
+  "image_model": "nano_banana_pro",
+  "shots": [
+    {
+      "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+      "shot_index": 0,
+      "description": "Reference-only master establishing geometry and lighting. Excluded from edit.",
+      "image_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. Full wide view. Abandoned machine cathedral, cracked black basalt floor with fine ash, immense ribbed concrete columns, broken circular roof aperture high at background right, sparse suspended dust. Cold blue-gray skylight from upper right, warm amber only from power cores. No rain, no vegetation, no crowds, no text. slender chipped-ivory salvage robot, oval head, two round amber lamp eyes, articulated dark joints, circular glass amber chest core, red cloth wrist ribbon, empty mechanical hands stands at left of central column; tiny palm-sized copper mechanical sparrow, layered copper feathers, two legs and two wings, single ivory tail accent, small circular breast core lies on floor two feet to its right. Both visible, static neutral staging. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout.",
+      "video_prompt": "",
+      "dialogue_text": "",
+      "duration_seconds": 1,
+      "shot_coherence_role": "foundation",
+      "reference_shot_hints": "",
+      "shot_continuity_notes": null,
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+      "end_frame_prompt": null,
+      "end_frame_image_url": null,
+      "shot_video_url": null,
+      "beginning_transition": null,
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [],
+      "voiceover_text": null,
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+      "references": []
+    },
+    {
+      "id": "a8623a0a-beec-426f-a797-21275b7369f6",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "01 \u2014 The near miss",
+      "shot_index": 1,
+      "description": "The near miss. Ground-level extreme close-up, camera two inches above floor: palm-sized copper mechanical sparrow, layered copper feathers, two legs and two wings, single ivory tail accent, small circular breast core lying on its side in lower foreground, breast core unlit. A huge ivory robot boot hovers just above and behind it, boot occupying upper half of frame; robot upper body outside frame.",
+      "image_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. Match lighting, environment and geometry of image 1, the scene foundation. Match the exact robot design from image 2, Salvage Robot, omitting wrench. Match the exact bird design from image 3, Copper Sparrow. Reinterpret from a distinctly different camera position and perspective than image 1. Ground-level extreme close-up, camera two inches above floor: palm-sized copper mechanical sparrow, layered copper feathers, two legs and two wings, single ivory tail accent, small circular breast core lying on its side in lower foreground, breast core unlit. A huge ivory robot boot hovers just above and behind it, boot occupying upper half of frame; robot upper body outside frame. Abandoned machine cathedral, cracked black basalt floor with fine ash, immense ribbed concrete columns, broken circular roof aperture high at background right, sparse suspended dust. Cold blue-gray skylight from upper right, warm amber only from power cores. No rain, no vegetation, no crowds, no text. No handheld wrench. No captions, text, logos or watermark. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Use photographic character reference for consistent facial features and build.",
+      "video_prompt": "Premium dark science-fiction animation. Locked ground-level camera, one continuous five-second shot. The ivory robot boot is hovering above the powerless copper bird. The boot slowly withdraws UP and to the LEFT, then plants safely on the floor to the LEFT of the bird. The bird stays on the floor, weakly twitching one wing. The boot never touches the bird. Robot never jumps. No camera movement, no cuts, no scene change. Heavy servo retract, a soft mechanical chirp, ominous low room tone. No speech or text. Normal real-time speed.",
+      "dialogue_text": "",
+      "duration_seconds": 5,
+      "shot_coherence_role": "standard",
+      "reference_shot_hints": "Scene foundation shot 0; elements: Salvage Robot, Copper Sparrow.",
+      "shot_continuity_notes": "Same column base and roof opening background-right. Camera stays on front side of robot-bird axis. Bird departs upward screen-right; returns toward robot. Robot core dark in shots 7-10; restored in 11-12. Wrench omitted.",
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/4fffc34a2a28_5cbecd37b37a466d.png",
+      "end_frame_prompt": "",
+      "end_frame_image_url": null,
+      "shot_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/shot-videos/8e2d290e3ba6_19156e5b64e54e04.mp4",
+      "beginning_transition": "",
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [
+        "74947410-3a2b-465b-ba17-16d6dd30ed21",
+        "d1ef6b6d-2886-45fb-bb8f-60bc228896fe"
+      ],
+      "voiceover_text": "",
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [
+        "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9"
+      ],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-a8623a0a-beec-426f-a797-21275b7369f6",
+      "references": [
+        {
+          "type": "shot",
+          "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+          "record": {
+            "shot_index": 0,
+            "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+            "scene_index": 1,
+            "shot_coherence_role": "foundation",
+            "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png"
+          }
+        },
+        {
+          "type": "element",
+          "id": "74947410-3a2b-465b-ba17-16d6dd30ed21",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png",
+          "record": {
+            "name": "Salvage Robot",
+            "category": "character",
+            "description": "Chipped ivory robot with amber circular eyes, amber circular chest core, red wrist ribbon. Reference design is canonical; omit the handheld wrench in narrative shots.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png"
+            ]
+          }
+        },
+        {
+          "type": "element",
+          "id": "d1ef6b6d-2886-45fb-bb8f-60bc228896fe",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png",
+          "record": {
+            "name": "Copper Sparrow",
+            "category": "character",
+            "description": "Palm-sized copper mechanical sparrow with ivory tail accent and amber breast core.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "f0de354b-b893-401d-a302-d701d51ba948",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "02 \u2014 A choice to care",
+      "shot_index": 2,
+      "description": "A choice to care. Wide three-quarter view, camera at bird height and 45 degrees toward robot front: slender chipped-ivory salvage robot, oval head, two round amber lamp eyes, articulated dark joints, circular glass amber chest core, red cloth wrist ribbon, empty mechanical hands crouched beside the tiny fallen palm-sized copper mechanical sparrow, layered copper feathers, two legs and two wings, single ivory tail accent, small circular breast core. Empty open hand poised beside the bird, robot looking down toward screen right.",
+      "image_prompt": "16mm/35mm narrative short, premium dark science-fiction CGI. Correct image 1, the existing shot. Use image 2 as the exact robot identity, and image 3 as the exact bird identity. Replace the robot entirely with the EXACT long oval-faced ivory robot in image 2: same face seams, shoulder armor, mechanical joints. The bird is the EXACT copper sparrow of image 3, lying collapsed ON ITS SIDE on the floor, eyes closed and breast core completely dark. Robot kneels with one empty hand beside bird. Maintain scene, framing, lighting. Do not use the simpler round-headed robot. Tactile weathered metal, physically plausible mechanical anatomy, cool skylight with amber practical light, filmic texture. No text, no logos, no extra limbs. ",
+      "video_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. Robot bends one knee and lowers its head toward the bird, hesitates, then gently slides an open palm underneath it. Camera makes a short lateral move, keeping bird and bowed robot clear. Restrained servo creaks, distant wind, delicate copper scrape. Preserve character design and machine anatomy. No speech, no narration, no text. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Real time, normal speed, no slow motion.",
+      "dialogue_text": "",
+      "duration_seconds": 5,
+      "shot_coherence_role": "standard",
+      "reference_shot_hints": "Scene foundation shot 0; elements: Salvage Robot, Copper Sparrow.",
+      "shot_continuity_notes": "Same column base and roof opening background-right. Camera stays on front side of robot-bird axis. Bird departs upward screen-right; returns toward robot. Robot core dark in shots 7-10; restored in 11-12. Wrench omitted.",
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/472af93d9ce3_73e1738b8c4d477f.png",
+      "end_frame_prompt": "",
+      "end_frame_image_url": null,
+      "shot_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/shot-videos/600859ac63d8_fb9e09485c88469d.mp4",
+      "beginning_transition": "",
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [
+        "74947410-3a2b-465b-ba17-16d6dd30ed21",
+        "d1ef6b6d-2886-45fb-bb8f-60bc228896fe"
+      ],
+      "voiceover_text": "",
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [
+        "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9"
+      ],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-f0de354b-b893-401d-a302-d701d51ba948",
+      "references": [
+        {
+          "type": "shot",
+          "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+          "record": {
+            "shot_index": 0,
+            "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+            "scene_index": 1,
+            "shot_coherence_role": "foundation",
+            "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png"
+          }
+        },
+        {
+          "type": "element",
+          "id": "74947410-3a2b-465b-ba17-16d6dd30ed21",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png",
+          "record": {
+            "name": "Salvage Robot",
+            "category": "character",
+            "description": "Chipped ivory robot with amber circular eyes, amber circular chest core, red wrist ribbon. Reference design is canonical; omit the handheld wrench in narrative shots.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png"
+            ]
+          }
+        },
+        {
+          "type": "element",
+          "id": "d1ef6b6d-2886-45fb-bb8f-60bc228896fe",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png",
+          "record": {
+            "name": "Copper Sparrow",
+            "category": "character",
+            "description": "Palm-sized copper mechanical sparrow with ivory tail accent and amber breast core.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "165f59ff-87ff-4930-8122-eba3f20dfeab",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "03 \u2014 One failing heartbeat",
+      "shot_index": 3,
+      "description": "One failing heartbeat. Macro insert from above the robot palm: palm-sized copper mechanical sparrow, layered copper feathers, two legs and two wings, single ivory tail accent, small circular breast core lies still across the open ivory hand, bird breast core barely lit, robot fingertips form a protective arc without touching wings. Copper bird dominates frame, floor distant.",
+      "image_prompt": "16mm/35mm narrative short, premium dark science-fiction CGI. Correct image 1, the existing shot. Use image 2 as the exact robot identity, and image 3 as the exact bird identity. The tiny bird is lying sideways limp across a HORIZONTAL upturned mechanical palm. Camera looks DOWN into palm at 45 degrees. Visible breast has ONE dark amber socket, no power socket on back or wings. Closed eyes, folded wings, beak drooping. Exact bird design from image 3, hand design from image 2. Background is softly blurred floor only. NO upright palm, NO standing bird. Tactile weathered metal, physically plausible mechanical anatomy, cool skylight with amber practical light, filmic texture. No text, no logos, no extra limbs. ",
+      "video_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. The bird attempts one tiny head lift then sinks back. Its breast light pulses once and fades. Robot palm remains steady. Camera creeps closer; a failing electrical chirp and a single muted heartbeat. Preserve character design and machine anatomy. No speech, no narration, no text. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Real time, normal speed, no slow motion.",
+      "dialogue_text": "",
+      "duration_seconds": 5,
+      "shot_coherence_role": "standard",
+      "reference_shot_hints": "Scene foundation shot 0; elements: Salvage Robot, Copper Sparrow.",
+      "shot_continuity_notes": "Same column base and roof opening background-right. Camera stays on front side of robot-bird axis. Bird departs upward screen-right; returns toward robot. Robot core dark in shots 7-10; restored in 11-12. Wrench omitted.",
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/05d7c6e1562d_95cf0fd3890149c0.png",
+      "end_frame_prompt": "",
+      "end_frame_image_url": null,
+      "shot_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/shot-videos/1747a59166fb_ad8d0805ef25409b.mp4",
+      "beginning_transition": "",
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [
+        "74947410-3a2b-465b-ba17-16d6dd30ed21",
+        "d1ef6b6d-2886-45fb-bb8f-60bc228896fe"
+      ],
+      "voiceover_text": "",
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [
+        "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9"
+      ],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-165f59ff-87ff-4930-8122-eba3f20dfeab",
+      "references": [
+        {
+          "type": "shot",
+          "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+          "record": {
+            "shot_index": 0,
+            "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+            "scene_index": 1,
+            "shot_coherence_role": "foundation",
+            "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png"
+          }
+        },
+        {
+          "type": "element",
+          "id": "74947410-3a2b-465b-ba17-16d6dd30ed21",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png",
+          "record": {
+            "name": "Salvage Robot",
+            "category": "character",
+            "description": "Chipped ivory robot with amber circular eyes, amber circular chest core, red wrist ribbon. Reference design is canonical; omit the handheld wrench in narrative shots.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png"
+            ]
+          }
+        },
+        {
+          "type": "element",
+          "id": "d1ef6b6d-2886-45fb-bb8f-60bc228896fe",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png",
+          "record": {
+            "name": "Copper Sparrow",
+            "category": "character",
+            "description": "Palm-sized copper mechanical sparrow with ivory tail accent and amber breast core.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "8f03999d-1a4c-41cb-8b4e-072d815dc6f2",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "04 \u2014 The price",
+      "shot_index": 4,
+      "description": "The price. Tight portrait from chest level, camera at robot front-left: slender chipped-ivory salvage robot, oval head, two round amber lamp eyes, articulated dark joints, circular glass amber chest core, red cloth wrist ribbon, empty mechanical hands looking down at its own dim amber chest core. The bird rests in its lowered left palm at bottom edge. Right fingertips rest beside chest core.",
+      "image_prompt": "16mm/35mm narrative short, premium dark science-fiction CGI. Correct image 1, the existing shot. Use image 2 as the exact robot identity, and image 3 as the exact bird identity. Keep exact oval-faced robot. Bird must lie LIMPLY on its SIDE in the horizontal supporting palm at bottom of frame, breast core BLACK and eyes CLOSED. Robot eyes dim amber, hand beside dim chest light. Only ONE red wrist ribbon. This is BEFORE the bird is rescued. Keep intimate portrait composition. Tactile weathered metal, physically plausible mechanical anatomy, cool skylight with amber practical light, filmic texture. No text, no logos, no extra limbs. ",
+      "video_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. Robot looks from dying bird to its own flickering chest light. Its right hand covers the chest core, then the robot lifts its head with a small deliberate nod. Camera tilts from core to eyes. Two slowing heartbeat pulses, restrained tense bass. Preserve character design and machine anatomy. No speech, no narration, no text. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Real time, normal speed, no slow motion.",
+      "dialogue_text": "",
+      "duration_seconds": 5,
+      "shot_coherence_role": "standard",
+      "reference_shot_hints": "Scene foundation shot 0; elements: Salvage Robot, Copper Sparrow.",
+      "shot_continuity_notes": "Same column base and roof opening background-right. Camera stays on front side of robot-bird axis. Bird departs upward screen-right; returns toward robot. Robot core dark in shots 7-10; restored in 11-12. Wrench omitted.",
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/211b107079be_25e979d94d914477.png",
+      "end_frame_prompt": "",
+      "end_frame_image_url": null,
+      "shot_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/shot-videos/bcd485d04b89_1d414f047f604340.mp4",
+      "beginning_transition": "",
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [
+        "74947410-3a2b-465b-ba17-16d6dd30ed21",
+        "d1ef6b6d-2886-45fb-bb8f-60bc228896fe"
+      ],
+      "voiceover_text": "",
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [
+        "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9"
+      ],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-8f03999d-1a4c-41cb-8b4e-072d815dc6f2",
+      "references": [
+        {
+          "type": "shot",
+          "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+          "record": {
+            "shot_index": 0,
+            "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+            "scene_index": 1,
+            "shot_coherence_role": "foundation",
+            "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png"
+          }
+        },
+        {
+          "type": "element",
+          "id": "74947410-3a2b-465b-ba17-16d6dd30ed21",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png",
+          "record": {
+            "name": "Salvage Robot",
+            "category": "character",
+            "description": "Chipped ivory robot with amber circular eyes, amber circular chest core, red wrist ribbon. Reference design is canonical; omit the handheld wrench in narrative shots.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png"
+            ]
+          }
+        },
+        {
+          "type": "element",
+          "id": "d1ef6b6d-2886-45fb-bb8f-60bc228896fe",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png",
+          "record": {
+            "name": "Copper Sparrow",
+            "category": "character",
+            "description": "Palm-sized copper mechanical sparrow with ivory tail accent and amber breast core.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "34fecca4-160a-499c-a76b-333dc34696ce",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "05 \u2014 The last charge",
+      "shot_index": 5,
+      "description": "The last charge. Medium profile from robot right side, robot kneeling, dying copper bird held near sternum in left palm. Right palm flat against glass chest core. Chest core amber bright, eyes dim. Hands clearly separate.",
+      "image_prompt": "16mm/35mm narrative short, premium dark science-fiction CGI. Correct image 1, the existing shot. Use image 2 as the exact robot identity, and image 3 as the exact bird identity. Use exact robot from image 2 and exact bird from image 3. Kneeling robot right palm against chest, left palm cradles bird LYING ON SIDE, visibly limp and powerless, bird breast core completely dark. Robot eyes faint amber; robot chest bright amber. Change camera to strict SIDE PROFILE with the robot filling most of vertical frame. Only ONE ribbon. Tactile weathered metal, physically plausible mechanical anatomy, cool skylight with amber practical light, filmic texture. No text, no logos, no extra limbs. ",
+      "video_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. Robot draws its right hand away from the chest, carrying a small amber electrical glow in the palm, not a physical object. Its chest core dims as energy travels along wrist joints. It brings the glowing hand toward the bird. Camera pushes in; rising electrical hum, servo strain. Preserve character design and machine anatomy. No speech, no narration, no text. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Real time, normal speed, no slow motion.",
+      "dialogue_text": "",
+      "duration_seconds": 5,
+      "shot_coherence_role": "standard",
+      "reference_shot_hints": "Scene foundation shot 0; elements: Salvage Robot, Copper Sparrow.",
+      "shot_continuity_notes": "Same column base and roof opening background-right. Camera stays on front side of robot-bird axis. Bird departs upward screen-right; returns toward robot. Robot core dark in shots 7-10; restored in 11-12. Wrench omitted.",
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/629d6fe3a60a_4af01082b12443c3.png",
+      "end_frame_prompt": "",
+      "end_frame_image_url": null,
+      "shot_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/shot-videos/8face345f36e_a2a59dcb15ef44f0.mp4",
+      "beginning_transition": "",
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [
+        "74947410-3a2b-465b-ba17-16d6dd30ed21",
+        "d1ef6b6d-2886-45fb-bb8f-60bc228896fe"
+      ],
+      "voiceover_text": "",
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [
+        "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9"
+      ],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-34fecca4-160a-499c-a76b-333dc34696ce",
+      "references": [
+        {
+          "type": "shot",
+          "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+          "record": {
+            "shot_index": 0,
+            "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+            "scene_index": 1,
+            "shot_coherence_role": "foundation",
+            "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png"
+          }
+        },
+        {
+          "type": "element",
+          "id": "74947410-3a2b-465b-ba17-16d6dd30ed21",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png",
+          "record": {
+            "name": "Salvage Robot",
+            "category": "character",
+            "description": "Chipped ivory robot with amber circular eyes, amber circular chest core, red wrist ribbon. Reference design is canonical; omit the handheld wrench in narrative shots.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png"
+            ]
+          }
+        },
+        {
+          "type": "element",
+          "id": "d1ef6b6d-2886-45fb-bb8f-60bc228896fe",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png",
+          "record": {
+            "name": "Copper Sparrow",
+            "category": "character",
+            "description": "Palm-sized copper mechanical sparrow with ivory tail accent and amber breast core.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "d281239f-9b48-4878-9e7a-87df03a63734",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "06 \u2014 A heart given",
+      "shot_index": 6,
+      "description": "A heart given. Extreme close-up from beside hands: copper bird reclines in left palm; robot right fingertip poised against bird breast socket. Bright amber glow at fingertip; robot dim chest core visible blurred behind.",
+      "image_prompt": "16mm/35mm narrative short, premium dark science-fiction CGI. Correct image 1, the existing shot. Use image 2 as the exact robot identity, and image 3 as the exact bird identity. Bird must be reclining weakly on its side in a horizontal palm, eyes closed and breast socket completely BLACK. One robot fingertip poised at dark bird socket, tiny amber glow on fingertip. Robot chest core dim amber. Camera tight on hand, bird, fingertip; top of robot head outside crop. This is the instant BEFORE energy transfer, not after. Exact copper sparrow from image 3. Tactile weathered metal, physically plausible mechanical anatomy, cool skylight with amber practical light, filmic texture. No text, no logos, no extra limbs. ",
+      "video_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. Fingertip gently contacts bird breast socket. A clean amber pulse travels into the bird; bird core brightens while the robot chest core in background goes completely dark. Hold long enough to make the exchange readable. A pure electrical chime, then sudden hush. Preserve character design and machine anatomy. No speech, no narration, no text. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Real time, normal speed, no slow motion.",
+      "dialogue_text": "",
+      "duration_seconds": 5,
+      "shot_coherence_role": "standard",
+      "reference_shot_hints": "Scene foundation shot 0; elements: Salvage Robot, Copper Sparrow.",
+      "shot_continuity_notes": "Same column base and roof opening background-right. Camera stays on front side of robot-bird axis. Bird departs upward screen-right; returns toward robot. Robot core dark in shots 7-10; restored in 11-12. Wrench omitted.",
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/5ce7b3e9637a_75e17cc6990a4d4b.png",
+      "end_frame_prompt": "",
+      "end_frame_image_url": null,
+      "shot_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/shot-videos/308908063fa9_a2ab16e62b394a1b.mp4",
+      "beginning_transition": "",
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [
+        "74947410-3a2b-465b-ba17-16d6dd30ed21",
+        "d1ef6b6d-2886-45fb-bb8f-60bc228896fe"
+      ],
+      "voiceover_text": "",
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [
+        "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9"
+      ],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-d281239f-9b48-4878-9e7a-87df03a63734",
+      "references": [
+        {
+          "type": "shot",
+          "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+          "record": {
+            "shot_index": 0,
+            "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+            "scene_index": 1,
+            "shot_coherence_role": "foundation",
+            "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png"
+          }
+        },
+        {
+          "type": "element",
+          "id": "74947410-3a2b-465b-ba17-16d6dd30ed21",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png",
+          "record": {
+            "name": "Salvage Robot",
+            "category": "character",
+            "description": "Chipped ivory robot with amber circular eyes, amber circular chest core, red wrist ribbon. Reference design is canonical; omit the handheld wrench in narrative shots.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png"
+            ]
+          }
+        },
+        {
+          "type": "element",
+          "id": "d1ef6b6d-2886-45fb-bb8f-60bc228896fe",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png",
+          "record": {
+            "name": "Copper Sparrow",
+            "category": "character",
+            "description": "Palm-sized copper mechanical sparrow with ivory tail accent and amber breast core.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "0a879dff-93fe-4274-9ca5-e63cb1467da9",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "07 \u2014 You can fly",
+      "shot_index": 7,
+      "description": "You can fly. Medium three-quarter from below robot hands: palm-sized copper mechanical sparrow, layered copper feathers, two legs and two wings, single ivory tail accent, small circular breast core stands upright alive in robot open palm, breast core brightly lit. Robot dark chest and dim eyes behind it. Wings folded before takeoff.",
+      "image_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. Match lighting, environment and geometry of image 1, the scene foundation. Match the exact robot design from image 2, Salvage Robot, omitting wrench. Match the exact bird design from image 3, Copper Sparrow. Reinterpret from a distinctly different camera position and perspective than image 1. Medium three-quarter from below robot hands: palm-sized copper mechanical sparrow, layered copper feathers, two legs and two wings, single ivory tail accent, small circular breast core stands upright alive in robot open palm, breast core brightly lit. Robot dark chest and dim eyes behind it. Wings folded before takeoff. Abandoned machine cathedral, cracked black basalt floor with fine ash, immense ribbed concrete columns, broken circular roof aperture high at background right, sparse suspended dust. Cold blue-gray skylight from upper right, warm amber only from power cores. No rain, no vegetation, no crowds, no text. No handheld wrench. No captions, text, logos or watermark. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Use photographic character reference for consistent facial features and build.",
+      "video_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. The revived bird tilts its head toward robot, spreads both copper wings, and launches up toward screen right. Camera tilts slightly with its flight. Robot hand stays open as bird leaves. Clear hopeful mechanical chirp, fluttering metal wings, brief warm harmonic swell. Preserve character design and machine anatomy. No speech, no narration, no text. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Real time, normal speed, no slow motion.",
+      "dialogue_text": "",
+      "duration_seconds": 5,
+      "shot_coherence_role": "standard",
+      "reference_shot_hints": "Scene foundation shot 0; elements: Salvage Robot, Copper Sparrow.",
+      "shot_continuity_notes": "Same column base and roof opening background-right. Camera stays on front side of robot-bird axis. Bird departs upward screen-right; returns toward robot. Robot core dark in shots 7-10; restored in 11-12. Wrench omitted.",
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/325a34612ec7_b40304e3db3746cb.png",
+      "end_frame_prompt": "",
+      "end_frame_image_url": null,
+      "shot_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/shot-videos/2de5a2a50b54_4ee064813c3b4b08.mp4",
+      "beginning_transition": "",
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [
+        "74947410-3a2b-465b-ba17-16d6dd30ed21",
+        "d1ef6b6d-2886-45fb-bb8f-60bc228896fe"
+      ],
+      "voiceover_text": "",
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [
+        "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9"
+      ],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-0a879dff-93fe-4274-9ca5-e63cb1467da9",
+      "references": [
+        {
+          "type": "shot",
+          "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+          "record": {
+            "shot_index": 0,
+            "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+            "scene_index": 1,
+            "shot_coherence_role": "foundation",
+            "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png"
+          }
+        },
+        {
+          "type": "element",
+          "id": "74947410-3a2b-465b-ba17-16d6dd30ed21",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png",
+          "record": {
+            "name": "Salvage Robot",
+            "category": "character",
+            "description": "Chipped ivory robot with amber circular eyes, amber circular chest core, red wrist ribbon. Reference design is canonical; omit the handheld wrench in narrative shots.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png"
+            ]
+          }
+        },
+        {
+          "type": "element",
+          "id": "d1ef6b6d-2886-45fb-bb8f-60bc228896fe",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png",
+          "record": {
+            "name": "Copper Sparrow",
+            "category": "character",
+            "description": "Palm-sized copper mechanical sparrow with ivory tail accent and amber breast core.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "73494e44-33e5-4bb0-899d-cb13240c6bd6",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "08 \u2014 The cost",
+      "shot_index": 8,
+      "description": "The cost. Wide side view from floor: robot kneeling alone with dark chest core, arms slack, eyes very faint. Bird absent. Tall columns frame solitary figure in bottom half.",
+      "image_prompt": "16mm/35mm narrative short, premium dark science-fiction CGI. Correct image 1, the existing shot. Use image 2 as the exact robot identity, and image 3 as the exact bird identity. Replace robot with the EXACT long oval-faced armored ivory robot in image 2, same face seams and shoulders. Keep kneeling alone, slumped, arms slack, both eyes and chest core BLACK. No birds. Camera at ground height facing robot side, distinctly different view of columns. Preserve lighting. Tactile weathered metal, physically plausible mechanical anatomy, cool skylight with amber practical light, filmic texture. No text, no logos, no extra limbs. ",
+      "video_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. Robot sways, lowers onto its hip and settles with back against column base, head bowing and arms falling gently into lap. Its eyes extinguish. Camera pulls back to show its isolation. Servo winding down, final low heartbeat, then only air. Preserve character design and machine anatomy. No speech, no narration, no text. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Real time, normal speed, no slow motion.",
+      "dialogue_text": "",
+      "duration_seconds": 5,
+      "shot_coherence_role": "standard",
+      "reference_shot_hints": "Scene foundation shot 0; elements: Salvage Robot, Copper Sparrow.",
+      "shot_continuity_notes": "Same column base and roof opening background-right. Camera stays on front side of robot-bird axis. Bird departs upward screen-right; returns toward robot. Robot core dark in shots 7-10; restored in 11-12. Wrench omitted.",
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/347d8130bfb8_aedeb8b0a9404288.png",
+      "end_frame_prompt": "",
+      "end_frame_image_url": null,
+      "shot_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/shot-videos/2cc9993b6115_d1ac448e73a84de3.mp4",
+      "beginning_transition": "",
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [
+        "74947410-3a2b-465b-ba17-16d6dd30ed21",
+        "d1ef6b6d-2886-45fb-bb8f-60bc228896fe"
+      ],
+      "voiceover_text": "",
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [
+        "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9"
+      ],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-73494e44-33e5-4bb0-899d-cb13240c6bd6",
+      "references": [
+        {
+          "type": "shot",
+          "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+          "record": {
+            "shot_index": 0,
+            "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+            "scene_index": 1,
+            "shot_coherence_role": "foundation",
+            "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png"
+          }
+        },
+        {
+          "type": "element",
+          "id": "74947410-3a2b-465b-ba17-16d6dd30ed21",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png",
+          "record": {
+            "name": "Salvage Robot",
+            "category": "character",
+            "description": "Chipped ivory robot with amber circular eyes, amber circular chest core, red wrist ribbon. Reference design is canonical; omit the handheld wrench in narrative shots.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png"
+            ]
+          }
+        },
+        {
+          "type": "element",
+          "id": "d1ef6b6d-2886-45fb-bb8f-60bc228896fe",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png",
+          "record": {
+            "name": "Copper Sparrow",
+            "category": "character",
+            "description": "Palm-sized copper mechanical sparrow with ivory tail accent and amber breast core.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ca91268a-6592-493a-8e1d-e6a946273ca3",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "09 \u2014 Someone came back",
+      "shot_index": 9,
+      "description": "Someone came back. Tight three-quarter of inert robot head and torso at column base, both eyes and chest core black. Copper sparrow stands on the robot chest just above dark glass core, its own breast core bright.",
+      "image_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. Match lighting, environment and geometry of image 1, the scene foundation. Match the exact robot design from image 2, Salvage Robot, omitting wrench. Match the exact bird design from image 3, Copper Sparrow. Reinterpret from a distinctly different camera position and perspective than image 1. Tight three-quarter of inert robot head and torso at column base, both eyes and chest core black. Copper sparrow stands on the robot chest just above dark glass core, its own breast core bright. Abandoned machine cathedral, cracked black basalt floor with fine ash, immense ribbed concrete columns, broken circular roof aperture high at background right, sparse suspended dust. Cold blue-gray skylight from upper right, warm amber only from power cores. No rain, no vegetation, no crowds, no text. No handheld wrench. No captions, text, logos or watermark. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Use photographic character reference for consistent facial features and build.",
+      "video_prompt": "Premium dark science-fiction animation. Static camera, five seconds, one continuous shot. The powered-off robot stays completely motionless, head bowed, both eye sockets and chest core completely BLACK and UNLIT throughout. Only the copper sparrow moves: it leans from robot knee to tap the black chest glass twice with its beak, then lifts its head and calls upward. Bird breast light glows amber. Two hollow taps, then a lonely echoing three-note metallic chirp. Keep cold blue cathedral lighting. No robot movement or eye illumination. No speech, no text. Real time.",
+      "dialogue_text": "",
+      "duration_seconds": 5,
+      "shot_coherence_role": "standard",
+      "reference_shot_hints": "Scene foundation shot 0; elements: Salvage Robot, Copper Sparrow.",
+      "shot_continuity_notes": "Same column base and roof opening background-right. Camera stays on front side of robot-bird axis. Bird departs upward screen-right; returns toward robot. Robot core dark in shots 7-10; restored in 11-12. Wrench omitted.",
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/dd49444c884e_85f1ae0ab4f642ff.png",
+      "end_frame_prompt": "",
+      "end_frame_image_url": null,
+      "shot_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/shot-videos/c12f44d32467_337bba97f9574f99.mp4",
+      "beginning_transition": "",
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [
+        "74947410-3a2b-465b-ba17-16d6dd30ed21",
+        "d1ef6b6d-2886-45fb-bb8f-60bc228896fe"
+      ],
+      "voiceover_text": "",
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [
+        "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9"
+      ],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-ca91268a-6592-493a-8e1d-e6a946273ca3",
+      "references": [
+        {
+          "type": "shot",
+          "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+          "record": {
+            "shot_index": 0,
+            "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+            "scene_index": 1,
+            "shot_coherence_role": "foundation",
+            "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png"
+          }
+        },
+        {
+          "type": "element",
+          "id": "74947410-3a2b-465b-ba17-16d6dd30ed21",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png",
+          "record": {
+            "name": "Salvage Robot",
+            "category": "character",
+            "description": "Chipped ivory robot with amber circular eyes, amber circular chest core, red wrist ribbon. Reference design is canonical; omit the handheld wrench in narrative shots.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png"
+            ]
+          }
+        },
+        {
+          "type": "element",
+          "id": "d1ef6b6d-2886-45fb-bb8f-60bc228896fe",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png",
+          "record": {
+            "name": "Copper Sparrow",
+            "category": "character",
+            "description": "Palm-sized copper mechanical sparrow with ivory tail accent and amber breast core.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "1554e5b4-8d66-4f89-9b64-957ca1cff73b",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "10 \u2014 Not alone",
+      "shot_index": 10,
+      "description": "Not alone. Very wide from behind and beside inert seated robot, broken circular roof aperture dominates upper frame. Saved copper bird perched on robot shoulder. Five tiny amber points hover at aperture, distinct from background.",
+      "image_prompt": "16mm/35mm narrative short, premium dark science-fiction CGI. Correct image 1, the existing shot. Use image 2 as the exact robot identity, and image 3 as the exact bird identity. Remove robot from foreground ENTIRELY. Show only five small copper mechanical sparrows from image 3 silhouetted at the broken roof aperture, wings outstretched, tiny amber breast lights. Extreme upward angle toward roof. Each bird has two wings and one tail. Roof and dusty light fill entire 9:16 frame. NO robot, NO hands, NO other figures. This is a cutaway revealing help arriving. Tactile weathered metal, physically plausible mechanical anatomy, cool skylight with amber practical light, filmic texture. No text, no logos, no extra limbs. ",
+      "video_prompt": "16mm/35mm narrative short, premium dark science-fiction CGI. Five copper mechanical sparrows fly down through the broken roof aperture, amber breast lights glowing. Camera tilts down with their descent between monumental columns; birds sweep past camera and exit lower frame toward their waiting friend. Maintain exactly two wings per bird and stable copper feather geometry. Fluttering metallic wings, answering three-note chirps, a hopeful harmonic rise. No robot visible in this shot, no dialogue, no text. Real time, normal speed, no slow motion.",
+      "dialogue_text": "",
+      "duration_seconds": 5,
+      "shot_coherence_role": "standard",
+      "reference_shot_hints": "Scene foundation shot 0; elements: Salvage Robot, Copper Sparrow.",
+      "shot_continuity_notes": "Same column base and roof opening background-right. Camera stays on front side of robot-bird axis. Bird departs upward screen-right; returns toward robot. Robot core dark in shots 7-10; restored in 11-12. Wrench omitted.",
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/52f033472cdd_01dd7ee73efa4d1e.png",
+      "end_frame_prompt": "",
+      "end_frame_image_url": null,
+      "shot_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/shot-videos/cf4dd88855c1_2f064230dfa941b7.mp4",
+      "beginning_transition": "",
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [
+        "74947410-3a2b-465b-ba17-16d6dd30ed21",
+        "d1ef6b6d-2886-45fb-bb8f-60bc228896fe"
+      ],
+      "voiceover_text": "",
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [
+        "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9"
+      ],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-1554e5b4-8d66-4f89-9b64-957ca1cff73b",
+      "references": [
+        {
+          "type": "shot",
+          "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+          "record": {
+            "shot_index": 0,
+            "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+            "scene_index": 1,
+            "shot_coherence_role": "foundation",
+            "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png"
+          }
+        },
+        {
+          "type": "element",
+          "id": "74947410-3a2b-465b-ba17-16d6dd30ed21",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png",
+          "record": {
+            "name": "Salvage Robot",
+            "category": "character",
+            "description": "Chipped ivory robot with amber circular eyes, amber circular chest core, red wrist ribbon. Reference design is canonical; omit the handheld wrench in narrative shots.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png"
+            ]
+          }
+        },
+        {
+          "type": "element",
+          "id": "d1ef6b6d-2886-45fb-bb8f-60bc228896fe",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png",
+          "record": {
+            "name": "Copper Sparrow",
+            "category": "character",
+            "description": "Palm-sized copper mechanical sparrow with ivory tail accent and amber breast core.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "74eb50ec-a70c-44ff-ae6f-f8d02bd30997",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "11 \u2014 A heart returned",
+      "shot_index": 11,
+      "description": "A heart returned. Close-up camera above inert robot torso: saved copper bird at center beside dark circular chest glass, five other copper birds perched separately along shoulders and lap. Each bird breast glows amber, robot core remains black.",
+      "image_prompt": "16mm/35mm narrative short, premium dark science-fiction CGI. Correct image 1, the existing shot. Use image 2 as the exact robot identity, and image 3 as the exact bird identity. Robot MUST HAVE its intact oval HEAD visibly attached to its neck, eyes black, bowed forward. Camera now a medium three-quarter view of robot seated against column. Dark circular chest core visible. SIX copper birds total: one poised beside chest glass, two on shoulders, three on lap. Birds match image 3. Robot matches image 2. No extra birds. No glowing robot core yet. Tactile weathered metal, physically plausible mechanical anatomy, cool skylight with amber practical light, filmic texture. No text, no logos, no extra limbs. ",
+      "video_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. The central bird presses its glowing breast to the robot chest glass. Amber light spreads across the glass, then fills the robot core; the surrounding five birds lean close and their lights briefly dim. A resonant rising electrical chord resolves into a strong heartbeat. Camera pushes toward the glowing core. Preserve character design and machine anatomy. No speech, no narration, no text. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Real time, normal speed, no slow motion.",
+      "dialogue_text": "",
+      "duration_seconds": 5,
+      "shot_coherence_role": "standard",
+      "reference_shot_hints": "Scene foundation shot 0; elements: Salvage Robot, Copper Sparrow.",
+      "shot_continuity_notes": "Same column base and roof opening background-right. Camera stays on front side of robot-bird axis. Bird departs upward screen-right; returns toward robot. Robot core dark in shots 7-10; restored in 11-12. Wrench omitted.",
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/1cc5ace6787b_69cc05e103984587.png",
+      "end_frame_prompt": "",
+      "end_frame_image_url": null,
+      "shot_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/shot-videos/3768e4b7742c_d5886472676247c2.mp4",
+      "beginning_transition": "",
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [
+        "74947410-3a2b-465b-ba17-16d6dd30ed21",
+        "d1ef6b6d-2886-45fb-bb8f-60bc228896fe"
+      ],
+      "voiceover_text": "",
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [
+        "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9"
+      ],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-74eb50ec-a70c-44ff-ae6f-f8d02bd30997",
+      "references": [
+        {
+          "type": "shot",
+          "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+          "record": {
+            "shot_index": 0,
+            "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+            "scene_index": 1,
+            "shot_coherence_role": "foundation",
+            "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png"
+          }
+        },
+        {
+          "type": "element",
+          "id": "74947410-3a2b-465b-ba17-16d6dd30ed21",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png",
+          "record": {
+            "name": "Salvage Robot",
+            "category": "character",
+            "description": "Chipped ivory robot with amber circular eyes, amber circular chest core, red wrist ribbon. Reference design is canonical; omit the handheld wrench in narrative shots.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png"
+            ]
+          }
+        },
+        {
+          "type": "element",
+          "id": "d1ef6b6d-2886-45fb-bb8f-60bc228896fe",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png",
+          "record": {
+            "name": "Copper Sparrow",
+            "category": "character",
+            "description": "Palm-sized copper mechanical sparrow with ivory tail accent and amber breast core.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "d520381e-09be-4ff0-8c85-9009b035b184",
+      "video_id": "71fb87eb-2a4a-4278-981a-f17a6e1ff541",
+      "name": "12 \u2014 No longer alone",
+      "shot_index": 12,
+      "description": "No longer alone. Medium frontal intimate portrait of robot seated at column base, restored amber chest core lit, eyes still dark, saved copper bird on open hands in lap, five other birds around shoulders and knees.",
+      "image_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. Match lighting, environment and geometry of image 1, the scene foundation. Match the exact robot design from image 2, Salvage Robot, omitting wrench. Match the exact bird design from image 3, Copper Sparrow. Reinterpret from a distinctly different camera position and perspective than image 1. Medium frontal intimate portrait of robot seated at column base, restored amber chest core lit, eyes still dark, saved copper bird on open hands in lap, five other birds around shoulders and knees. Abandoned machine cathedral, cracked black basalt floor with fine ash, immense ribbed concrete columns, broken circular roof aperture high at background right, sparse suspended dust. Cold blue-gray skylight from upper right, warm amber only from power cores. No rain, no vegetation, no crowds, no text. No handheld wrench. No captions, text, logos or watermark. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Use photographic character reference for consistent facial features and build.",
+      "video_prompt": "16mm/35mm narrative short. Premium photoreal adult science-fiction animation in the aesthetic of Love Death and Robots, tactile weathered surfaces, emotionally expressive machines. Robot amber eyes illuminate. It raises its head, sees the saved bird and gently lifts its cupped hands toward its face. Bird leans its forehead against robot face. Camera eases outward to reveal the small flock together, then hold the resolved tableau for final second. Soft servos, affectionate chirp, warm resolved chord and steady heartbeat. No new threat, no cliffhanger. Preserve character design and machine anatomy. No speech, no narration, no text. Shot on real film / Arri Alexa 35: 16mm/35mm grain, gentle halation on speculars, shallow depth of field, motivated practical lighting, soft golden-hour key with a cool rim, restrained filmic color grade. Real lenses, real light, true-to-life texture. Photorealistic and physically plausible. NO plastic over-smoothing, NO waxy or airbrushed skin, NO uncanny or glassy eyes, NO warping or morphing features, NO extra or merging fingers/limbs, NO impossible physics. Natural motion cadence and natural micro-detail throughout. Real time, normal speed, no slow motion.",
+      "dialogue_text": "",
+      "duration_seconds": 5,
+      "shot_coherence_role": "standard",
+      "reference_shot_hints": "Scene foundation shot 0; elements: Salvage Robot, Copper Sparrow.",
+      "shot_continuity_notes": "Same column base and roof opening background-right. Camera stays on front side of robot-bird axis. Bird departs upward screen-right; returns toward robot. Robot core dark in shots 7-10; restored in 11-12. Wrench omitted.",
+      "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/bdc02fce85ea_4cbdca6571194529.png",
+      "end_frame_prompt": "",
+      "end_frame_image_url": null,
+      "shot_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/shot-videos/74c7de7a4899_7085ec8fd22341f9.mp4",
+      "beginning_transition": "",
+      "ending_transition": "cut",
+      "created_at": "2026-09-08T05:11:02.31626+00:00",
+      "updated_at": "2026-09-08T05:11:02.31626+00:00",
+      "remotion_code": null,
+      "voiceover_url": null,
+      "voiceover_duration_seconds": null,
+      "element_ids": [
+        "74947410-3a2b-465b-ba17-16d6dd30ed21",
+        "d1ef6b6d-2886-45fb-bb8f-60bc228896fe"
+      ],
+      "voiceover_text": "",
+      "scene_index": 1,
+      "scene_name": "Machine Cathedral",
+      "is_endframe_reference_startframe": null,
+      "source_start_seconds": null,
+      "source_end_seconds": null,
+      "audio_choice": "original",
+      "original_audio_url": null,
+      "reference_shot_ids": [
+        "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9"
+      ],
+      "editor_overrides": null,
+      "caption_text": null,
+      "deleted_at": null,
+      "link": "https://rgba.ai/projects/02242dc4-8c23-491e-9d30-e8d425ca72fa/videos/71fb87eb-2a4a-4278-981a-f17a6e1ff541#shot-d520381e-09be-4ff0-8c85-9009b035b184",
+      "references": [
+        {
+          "type": "shot",
+          "id": "91a1d4c2-2c5f-4b23-ad6b-d18c68cd98c9",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png",
+          "record": {
+            "shot_index": 0,
+            "name": "Scene Foundation \u2014 Machine Cathedral \u2014 Wide",
+            "scene_index": 1,
+            "shot_coherence_role": "foundation",
+            "storyboard_image_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/storyboards/43ad8049cd61_3983dde894f04194.png"
+          }
+        },
+        {
+          "type": "element",
+          "id": "74947410-3a2b-465b-ba17-16d6dd30ed21",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png",
+          "record": {
+            "name": "Salvage Robot",
+            "category": "character",
+            "description": "Chipped ivory robot with amber circular eyes, amber circular chest core, red wrist ribbon. Reference design is canonical; omit the handheld wrench in narrative shots.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/3d62e5337557_7dc2f069ddf3478b.png"
+            ]
+          }
+        },
+        {
+          "type": "element",
+          "id": "d1ef6b6d-2886-45fb-bb8f-60bc228896fe",
+          "url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png",
+          "record": {
+            "name": "Copper Sparrow",
+            "category": "character",
+            "description": "Palm-sized copper mechanical sparrow with ivory tail accent and amber breast core.",
+            "image_urls": [
+              "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/uploads/8c66a5c1737e_886f1c24d31947d4.png"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "final_video_url": "https://d1un68uoopnd4d.cloudfront.net/rgba-mcp-assets/final-videos/5c7465cf29e5_tmpq_m1opo0.mp4",
+  "actual_duration_seconds": 60
+}
