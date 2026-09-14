@@ -148,7 +148,9 @@ class ImagesTest(unittest.TestCase):
 		messages = [{"role": "user", "content": [{"type": "input_text", "text": "Inspect"}, part]}]
 		client = FakeClient()
 		ChatProvider("qwen", client=client).generate(messages, "qwen3.5-9b", None)
-		self.assertEqual(client.seen["messages"][0]["content"][1],
+		# The qwen backend inserts an English-only system message ahead of the user turn.
+		user = next(m for m in client.seen["messages"] if m["role"] == "user")
+		self.assertEqual(user["content"][1],
 		                 {"type": "image_url", "image_url": {"url": part["image_url"], "detail": "low"}})
 		client = Mock()
 		provider = OpenAIProvider(client=client)
