@@ -33,6 +33,7 @@ from .providers import (
 	image_parts,
 	model_spec,
 	make_provider,
+	close_provider,
 	with_retries,
 )
 
@@ -94,9 +95,10 @@ def stream(t: str) -> None:
 	print(t, end="", flush=True, file=sys.stderr)
 
 
-def attach_images(messages: list[InputItem], parts: list[dict], prompt: str) -> None:
+def attach_images(messages: list[InputItem], parts: list[dict], prompt: str,
+                  *, provider: Provider | None = None) -> None:
 	"""Keep a small image batch; automatically read larger inputs a batch at a time."""
-	provider, model = make_provider(), default_model()
+	provider, model = provider or make_provider(), default_model()
 	primary = provider.primary if isinstance(provider, FallbackProvider) else provider
 	name = primary.backend.name if hasattr(primary, "backend") else "openai"
 	spec = model_spec(model, name)
@@ -280,10 +282,13 @@ def agent_loop(
 	if history and messages[0].get("role") == "system":
 		messages[0] = system  # the date may have changed since the conversation started
 	current_start = len(messages)
-	messages.append(Message(role='user', content=prompt))
+	if prompt is not None:
+		messages.append(Message(role='user', content=prompt))
 	history_cleared = False
 
 	def finish_run(reason, steps, error=""):
+		runtime.checkpoint(messages, continuing=reason in ("mount", "interrupted"),
+		                   interactive=runtime.conversation.get("interactive", False))
 		return AgentRun(messages, reason, steps, error, history_cleared)
 
 
@@ -293,6 +298,8 @@ def agent_loop(
 	recovery = False
 	recovery_turns = 0
 	for step in range(1, max_steps + 1):
+		if runtime.stop_requested:
+			return finish_run("interrupted", step - 1)
 		if recovery:
 			if recovery_turns >= MAX_RECOVERY_TURNS:
 				return finish_run("stalled", step - 1, "Repeated tool calls; failed to finish during recovery")
@@ -301,12 +308,16 @@ def agent_loop(
 		if recovery:
 			schema = [tool for tool in schema if tool["name"] == DONE_TOOL]
 		trace(f"[LOG] step {step}/{max_steps} ({len(messages)} items in context)")
+		managed_provider = None
 		try:
+			if runtime.credentials:
+				managed_provider = make_provider(credential=runtime.credentials.credential)
 			if context_budget is not None:
 				if context_budget.prepare(messages, schema, current_start, max_output_tokens):
 					current_start = 1
 					history_cleared = True
 			turn = generate(
+				**({"provider": managed_provider} if managed_provider else {}),
 				messages=messages,
 				tools=schema,
 				tool_choice="required",
@@ -321,6 +332,9 @@ def agent_loop(
 		except Exception as exc:  # noqa: BLE001
 			log(f"[ERROR] generate failed at step {step}: {type(exc).__name__}: {exc}")
 			return finish_run("error", step - 1, f"{type(exc).__name__}: {exc}")
+		finally:
+			if managed_provider:
+				close_provider(managed_provider)
 		trace(json.dumps(asdict(turn), indent=2))
 
 		# potentially stalled agent
@@ -375,10 +389,22 @@ def agent_loop(
 				answer = result.output
 		if attachments:
 			answer = None  # The model must see the image result before it can finish.
+			image_provider = None
 			try:
-				attach_images(messages, attachments, prompt)
+				if runtime.credentials:
+					image_provider = make_provider(credential=runtime.credentials.credential)
+				attach_images(messages, attachments, prompt,
+				              **({"provider": image_provider} if image_provider else {}))
 			except Exception as exc:
 				messages.append(Message(role="user", content=f"image_view could not attach images: {exc}"))
+			finally:
+				if image_provider:
+					close_provider(image_provider)
+		if runtime.mount_pending:
+			return finish_run("mount", step)
+		if runtime.stop_requested:
+			return finish_run("interrupted", step)
+		runtime.checkpoint(messages, interactive=runtime.conversation.get("interactive", False))
 		if answer is not None:
 			messages.append(Message(role='assistant', content=answer))
 			return finish_run("done", step)

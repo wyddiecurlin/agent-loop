@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 from PIL import Image
 
 from agent_loop.images import convert, MAX_IMAGE_BYTES
+from agent_loop.runtime import DockerRuntime
 from agent_loop.providers import CATALOG, ChatProvider, OpenAIProvider, image_parts, validate_images
 
 
@@ -198,7 +199,7 @@ class ImagesTest(unittest.TestCase):
 			messages.append({"role": "user", "content": parts})
 		with patch.object(loop, "build_registry", return_value=registry), patch.object(loop, "generate", side_effect=turns), \
 		     patch.object(loop, "attach_images", side_effect=attach), patch.object(loop, "asdict", return_value={}):
-			run = loop.agent_loop("Inspect", None, verbose=False)
+			run = loop.agent_loop("Inspect", DockerRuntime(), verbose=False)
 		self.assertEqual(run.steps, 2)
 		self.assertEqual(run.messages[-1]["content"], "red")
 
@@ -252,6 +253,45 @@ class ImagesTest(unittest.TestCase):
 		labels = [p["text"] for batch in seen for p in batch[0]["content"] if p.get("text", "").startswith("Page ")]
 		self.assertEqual(labels, [f"Page {page}" for page in range(1, 10)])
 		self.assertFalse(image_parts(messages))
+
+	def test_image_batches_use_session_credentials_and_close_clients(self):
+		from agent_loop import loop
+		from agent_loop.providers import ModelTurn, ToolCall
+		from agent_loop.tools import ToolResult
+		part, = convert(fixture())
+		for fail_batch in (False, True):
+			with self.subTest(fail_batch=fail_batch):
+				runtime = DockerRuntime()
+				runtime.credentials = Mock()
+				provider = ChatProvider("qwen", client=Mock())
+				registry = Mock()
+				registry.execute.side_effect = [ToolResult(True, "prepared", {"attachments": [part] * 9}),
+				                               ToolResult(True, "finished")]
+				turns = iter([ModelTurn(None, [ToolCall("a", "image_view", "{}")], None, "completed"),
+				              ModelTurn(None, [ToolCall("b", "done", "{}")], None, "completed")])
+				batches = []
+				def make_provider(**kwargs):
+					self.assertIs(kwargs["credential"], runtime.credentials.credential)
+					return provider
+				def generate(**kwargs):
+					self.assertIs(kwargs["provider"], provider)
+					if kwargs["tools"] == []:
+						batches.append(len(image_parts(kwargs["messages"])))
+						if fail_batch:
+							raise RuntimeError("credential expired")
+						return Mock(text="Image observations")
+					return next(turns)
+				with patch.object(loop, "build_registry", return_value=registry), \
+				     patch.object(loop, "make_provider", side_effect=make_provider), \
+				     patch.object(loop, "default_model", return_value="qwen3.5-9b"), \
+				     patch.object(loop, "generate", side_effect=generate), \
+				     patch.object(loop, "close_provider") as close:
+					run = loop.agent_loop("Inspect", runtime, verbose=False)
+				self.assertTrue(run.ok)
+				self.assertEqual(batches, [4] if fail_batch else [4, 4, 1])
+				self.assertEqual(close.call_count, 3)
+				if fail_batch:
+					self.assertIn("credential expired", str(run.messages))
 
 	def test_all_small_raster_formats(self):
 		for format in ("JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF", "AVIF", "HEIF"):

@@ -9,6 +9,7 @@ from copy import deepcopy
 from unittest.mock import patch
 
 from agent_loop.providers import ModelTurn, ToolCall
+from agent_loop.runtime import DockerRuntime
 from agent_loop.tools import Tool, ToolRegistry, ToolResult, done
 
 loop = importlib.import_module('agent_loop.loop')
@@ -36,7 +37,7 @@ class RepeatedCallTests(unittest.TestCase):
 
         with patch.object(loop, 'generate', side_effect=generate), \
              patch.object(loop, 'build_registry', return_value=registry), redirect_stderr(io.StringIO()):
-            run = loop.agent_loop('find benchmarks', None, verbose=False, max_steps=max_steps)
+            run = loop.agent_loop('find benchmarks', DockerRuntime(), verbose=False, max_steps=max_steps)
         # Even a provider ignoring the restricted schema must keep calls paired.
         calls = [m['call_id'] for m in run.messages if m.get('type') == 'function_call']
         results = [m['call_id'] for m in run.messages if m.get('type') == 'function_call_output']

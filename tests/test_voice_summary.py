@@ -85,7 +85,7 @@ class QwenLanguageTests(unittest.TestCase):
     def test_all_self_hosted_requests_get_english_without_mutating_history(self):
         cases = ['你好', [{'role': 'system', 'content': 'Reply in the user language.'},
                          {'role': 'user', 'content': '你好'}],
-                 [{'role': 'developer', 'content': [{'type': 'text', 'text': 'Rules'}]}]]
+                 [{'role': 'developer', 'content': [{'type': 'input_text', 'text': 'Rules'}]}]]
         for messages in cases:
             original = deepcopy(messages)
             client = FakeClient()
