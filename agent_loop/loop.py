@@ -95,9 +95,10 @@ def stream(t: str) -> None:
 	print(t, end="", flush=True, file=sys.stderr)
 
 
-def attach_images(messages: list[InputItem], parts: list[dict], prompt: str) -> None:
+def attach_images(messages: list[InputItem], parts: list[dict], prompt: str,
+                  *, provider: Provider | None = None) -> None:
 	"""Keep a small image batch; automatically read larger inputs a batch at a time."""
-	provider, model = make_provider(), default_model()
+	provider, model = provider or make_provider(), default_model()
 	primary = provider.primary if isinstance(provider, FallbackProvider) else provider
 	name = primary.backend.name if hasattr(primary, "backend") else "openai"
 	spec = model_spec(model, name)
@@ -388,10 +389,17 @@ def agent_loop(
 				answer = result.output
 		if attachments:
 			answer = None  # The model must see the image result before it can finish.
+			image_provider = None
 			try:
-				attach_images(messages, attachments, prompt)
+				if runtime.credentials:
+					image_provider = make_provider(credential=runtime.credentials.credential)
+				attach_images(messages, attachments, prompt,
+				              **({"provider": image_provider} if image_provider else {}))
 			except Exception as exc:
 				messages.append(Message(role="user", content=f"image_view could not attach images: {exc}"))
+			finally:
+				if image_provider:
+					close_provider(image_provider)
 		if runtime.mount_pending:
 			return finish_run("mount", step)
 		if runtime.stop_requested:
