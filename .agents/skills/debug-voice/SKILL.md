@@ -1,6 +1,6 @@
 ---
 name: debug-voice
-description: Debug a failed or odd voice session — the Mimo phone app or ./voice.sh — from the per-run logs on the laptop or on lemontree. Use when the app said "I hit a problem", "Mimo couldn't finish that thought", "My voice cut out", "The voice connection stopped", or "Could not start the voice harness", or when a turn was slow, silent, or interrupted itself.
+description: "Debug a failed or odd voice session — the Mimo phone app or ./voice.sh — from the per-run logs on the laptop or on lemontree. Use when the app said \"I hit a problem\", \"Mimo couldn't finish that thought\", \"My voice cut out\", \"The voice connection stopped\", or \"Could not start the voice harness\", or when a turn was slow, silent, or interrupted itself."
 ---
 
 # Debugging a voice session
